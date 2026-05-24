@@ -140,6 +140,7 @@ Required `metadata` keys:
 | `data_date` | `'115-01'` | TGOS only; 民國年-月 |
 | `csv_sha256` | hex | TGOS only |
 | `inserted` | `'1316671'` | row count |
+| `skipped_dirty` | `'1'` | TGOS only; rows excluded per `dirty_data.yaml` (see [`dirty-data-report.md`](./dirty-data-report.md)) |
 | `region` | `'tw-central'` | OSM only |
 | `bbox` | `'120.20,23.55,121.45,24.75'` | OSM only |
 
@@ -371,6 +372,9 @@ Contents:
 - Bump `metadata.schema_version` from `'1'` to `'2'`
 - Plugin-side tier-3 reverse geocode shifts from sequential scan
   (1-30 s) to R*Tree bbox + haversine refine (< 200 ms)
+- Add `metadata.skipped_dirty` to TGOS sqlite files — count of rows
+  excluded per `dirty_data.yaml`. See [`dirty-data-report.md`](./dirty-data-report.md).
+  Schema unchanged; key is informational.
 
 ### `1` — 2026-05-24
 

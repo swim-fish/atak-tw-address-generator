@@ -48,6 +48,45 @@ def load_district_codes() -> dict:
         return yaml.safe_load(f)
 
 
+# Field order for the dirty-data composite key. MUST match the call site
+# below. Documented in docs/dirty-data-report.md.
+_DIRTY_KEY_FIELDS = (
+    "district_code", "village", "neighbor",
+    "street", "lane", "alley", "number",
+)
+
+
+def load_dirty_set(source: str, county_id: str, data_date: str) -> set[tuple]:
+    """Return the set of CSV-row composite keys to exclude.
+
+    Each entry in ``config/dirty_data.yaml`` lists a partial set of
+    fields under ``match``; we project to the full key tuple with
+    blanks for fields the entry didn't specify. The CSV-row key is
+    built with the same convention so a partial match key (e.g. one
+    without `lane`) still matches a row where the CSV column was empty.
+    """
+    path = CONFIG_DIR / "dirty_data.yaml"
+    if not path.exists():
+        return set()
+    cfg = yaml.safe_load(path.read_text("utf-8")) or {}
+    entries = (cfg.get(source, {}) or {}).get(county_id, {}) or {}
+    entries = entries.get(data_date, []) or []
+    out: set[tuple] = set()
+    for e in entries:
+        m = e.get("match", {}) or {}
+        out.add(tuple(str(m.get(k, "")) for k in _DIRTY_KEY_FIELDS))
+    return out
+
+
+def _row_dirty_key(raw) -> tuple:
+    """Build the composite key for a CSV row in the same order as
+    ``_DIRTY_KEY_FIELDS``."""
+    return (
+        raw.district_code, raw.village, raw.neighbor,
+        raw.street, raw.lane, raw.alley, raw.number,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -294,7 +333,13 @@ def ingest(county_id: str, batch_size: int = 10000) -> int:
         inserted = 0
         skipped_no_number = 0
         skipped_unknown_code = 0
+        skipped_dirty = 0
         batch: list[tuple] = []
+
+        dirty_set = load_dirty_set("tgos", county_id, src.get("data_date", ""))
+        if dirty_set:
+            print(f"[{county_id}] Dirty-data exclusion list: {len(dirty_set)} row(s) "
+                  f"(see docs/dirty-data-report.md)")
 
         expected = src.get("expected_rows", 0)
         rows_iter = stream_rows(
@@ -313,6 +358,9 @@ def ingest(county_id: str, batch_size: int = 10000) -> int:
             if raw.district_code not in code_table:
                 skipped_unknown_code += 1
                 continue
+            if dirty_set and _row_dirty_key(raw) in dirty_set:
+                skipped_dirty += 1
+                continue
             rec = derive_record(raw, code_table)
             if rec is None:
                 continue
@@ -330,7 +378,8 @@ def ingest(county_id: str, batch_size: int = 10000) -> int:
         print(f"[{county_id}] Inserted {inserted:,} rows in {elapsed:.1f}s "
               f"({inserted/elapsed:,.0f} rows/s)")
         print(f"[{county_id}] Skipped: empty 號={skipped_no_number}, "
-              f"unknown district={skipped_unknown_code}")
+              f"unknown district={skipped_unknown_code}, "
+              f"dirty={skipped_dirty}")
 
         # Build FTS5 index after bulk insert (much faster than per-row triggers)
         print(f"[{county_id}] Building FTS5 index...")
@@ -363,6 +412,7 @@ def ingest(county_id: str, batch_size: int = 10000) -> int:
             "inserted": str(inserted),
             "skipped_no_number": str(skipped_no_number),
             "skipped_unknown_code": str(skipped_unknown_code),
+            "skipped_dirty": str(skipped_dirty),
         }
         conn.executemany(
             "INSERT INTO metadata (key, value) VALUES (?, ?)",

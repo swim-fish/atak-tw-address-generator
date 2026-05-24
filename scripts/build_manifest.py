@@ -96,8 +96,9 @@ def write_manifest(
         lines.append(f"    sha256:  {file_sha}")
         meta = read_meta(p)
         for k in ("source", "county", "data_date", "csv_sha256",
-                  "inserted", "inserted_level4", "inserted_level7",
-                  "inserted_level8", "landmarks", "addrs_kept", "addrs_excluded"):
+                  "inserted", "skipped_dirty", "inserted_level4",
+                  "inserted_level7", "inserted_level8",
+                  "landmarks", "addrs_kept", "addrs_excluded"):
             if k in meta:
                 lines.append(f"    meta.{k}: {meta[k]}")
     manifest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

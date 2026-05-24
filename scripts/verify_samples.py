@@ -35,6 +35,7 @@ import yaml
 
 import coord_transform as ct
 import normalize_address as na
+from ingest_tgos_csv import load_dirty_set, _DIRTY_KEY_FIELDS
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
@@ -89,6 +90,10 @@ def load_county_samples(county_id: str, n: int = 50) -> dict[str, list[Sample]]:
     cols = src["columns"]
     is_wgs84 = src["crs"] == "EPSG:4326"
 
+    # Mirror the ingest-side dirty exclusion so we don't sample rows that
+    # the operational pipeline deliberately drops.
+    dirty_set = load_dirty_set("tgos", county_id, src.get("data_date", ""))
+
     samples: list[Sample] = []
     with open(csv_path, encoding=src["encoding"], newline="") as f:
         reader = csv.DictReader(f)
@@ -105,16 +110,26 @@ def load_county_samples(county_id: str, n: int = 50) -> dict[str, list[Sample]]:
                 continue
             number = row.get(cols["number"], "").strip()
             if not number:
-                continue  # skip dirty rows
+                continue  # skip CSV-empty 號 rows
+            district_code = row[cols["district_code"]].strip()
+            village = row.get(cols["village"], "").strip()
+            neighbor = row.get(cols["neighbor"], "").strip()
+            street = row.get(cols["street"], "").strip()
+            lane = row.get(cols["lane"], "").strip()
+            alley = row.get(cols["alley"], "").strip()
+            if dirty_set:
+                key = (district_code, village, neighbor, street, lane, alley, number)
+                if key in dirty_set:
+                    continue  # row excluded by config/dirty_data.yaml
             samples.append(Sample(
                 raw=row,
-                district_code=row[cols["district_code"]].strip(),
-                village=row.get(cols["village"], "").strip(),
-                neighbor=row.get(cols["neighbor"], "").strip(),
-                street=row.get(cols["street"], "").strip(),
+                district_code=district_code,
+                village=village,
+                neighbor=neighbor,
+                street=street,
                 area=row.get(cols["area"], "").strip(),
-                lane=row.get(cols["lane"], "").strip(),
-                alley=row.get(cols["alley"], "").strip(),
+                lane=lane,
+                alley=alley,
                 number=number,
                 lat=lat,
                 lon=lon,
@@ -235,6 +250,11 @@ def check_sample(
         results["coord_match"] = (False, "no match")
         results["display_name"] = (False, "no match")
         results["fts5_search"] = (False, "no match")
+        # Iteration-2 checks also have to be populated so callers can
+        # iterate `active_checks` without KeyError.
+        if townships_idx is not None:
+            results["polygon_in"] = (False, "no match")
+            results["reverse_township"] = (False, "no match")
         return results
 
     results["coverage"] = (True, "")

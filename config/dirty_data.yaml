@@ -1,0 +1,43 @@
+# Known dirty rows in upstream source data.
+#
+# Each entry is keyed by (source, county_id, data_date) so that an
+# exclusion only applies to the specific release it was discovered in.
+# A future TGOS release with the same address but a fixed coordinate
+# will NOT be matched (since we shipped a new data_date).
+#
+# Matching: all listed `match` fields must equal-string the CSV row's
+# fields. Fields omitted from `match` are not compared. This is a
+# stable identifier-based match — we deliberately do not match on
+# floats so that adding/fixing decimal places doesn't break exclusion.
+#
+# `observed` is for human-readable provenance — it does NOT affect
+# matching. `reason`, `discovered`, `expected_locale` are documentation.
+#
+# Full detail and the discovery methodology is in
+# docs/dirty-data-report.md.
+
+tgos:
+  changhua:
+    "114-05":
+      - reason: "TWD97 coord is ~25 km east of the claimed township; the
+          point falls inside 南投縣草屯鎮, not 彰化縣田尾鄉. Adjacent rows
+          on the same street (190號, 188號, …) have correct coords, so
+          this is a single-row data-entry typo upstream, not a systematic
+          projection issue."
+        discovered: "2026-05-24"
+        expected_locale: "彰化縣田尾鄉"
+        match:
+          district_code: "10007210"
+          village: "新生村"
+          neighbor: "8"
+          street: "富農路一段"
+          number: "１９０之１號"
+        observed:
+          twd97_x: 217897.28
+          twd97_y: 2653132.75
+          reprojected_wgs84_lat: 23.9826
+          reprojected_wgs84_lon: 120.6845
+          neighbour_row_for_reference:
+            number: "１９０號"
+            twd97_x: 204322.09
+            twd97_y: 2642533.80

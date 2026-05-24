@@ -1,0 +1,19 @@
+# Python dependencies for atak-tw-address-generator.
+# Pinned to latest stable releases that have been on PyPI for ≥ 30 days
+# (supply-chain cooldown). Confirmed release dates as of 2026-05-24:
+#
+#   osmium   4.3.1  released 2026-04-02   (was pyosmium pre-4.0 rename)
+#   shapely  2.1.2  released 2025-09-24
+#   pyproj   3.7.2  released 2025-08-14
+#   PyYAML   6.0.3  released 2025-09-25
+#   tqdm     4.67.3 released 2026-02-03
+#
+# To enable hash verification later:
+#   pip-compile --generate-hashes requirements.in -o requirements.txt
+# and rebuild with `docker build --build-arg PIP_HASHES=1 ...`.
+
+osmium==4.3.1
+shapely==2.1.2
+pyproj==3.7.2
+PyYAML==6.0.3
+tqdm==4.67.3

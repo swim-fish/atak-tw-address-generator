@@ -1,0 +1,69 @@
+# MOI 鄉鎮市區代碼 → 縣市/鄉鎮市區名稱對照
+#
+# 此檔混合處理：
+#   - 直轄市制 7 位代碼（前 2 位為縣市代碼 + 3 位區碼 + 00 補位）
+#   - 縣市制 8 位代碼（前 5 位為縣市代碼 + 3 位區碼）
+#
+# 直接用字串 key 查詢，不要對長度做假設。
+#
+# 名稱已對照 CSV 樣本中的 村里 命名規則（里=市鎮、村=鄉）驗證一致。
+# 若未來發現不符，於 verification report 中會出現對應的 polygon-in 失敗。
+
+# ---- 台中市（直轄市） ----
+"6600100": { county: "台中市", district: "中區" }
+"6600200": { county: "台中市", district: "東區" }
+"6600300": { county: "台中市", district: "南區" }
+"6600400": { county: "台中市", district: "西區" }
+"6600500": { county: "台中市", district: "北區" }
+"6600600": { county: "台中市", district: "北屯區" }
+"6600700": { county: "台中市", district: "西屯區" }
+"6600800": { county: "台中市", district: "南屯區" }
+"6600900": { county: "台中市", district: "太平區" }
+"6601000": { county: "台中市", district: "大里區" }
+"6601100": { county: "台中市", district: "霧峰區" }
+"6601200": { county: "台中市", district: "烏日區" }
+"6601300": { county: "台中市", district: "豐原區" }
+"6601400": { county: "台中市", district: "后里區" }
+"6601500": { county: "台中市", district: "石岡區" }
+"6601600": { county: "台中市", district: "東勢區" }
+"6601700": { county: "台中市", district: "和平區" }
+"6601800": { county: "台中市", district: "新社區" }
+"6601900": { county: "台中市", district: "潭子區" }
+"6602000": { county: "台中市", district: "大雅區" }
+"6602100": { county: "台中市", district: "神岡區" }
+"6602200": { county: "台中市", district: "大肚區" }
+"6602300": { county: "台中市", district: "沙鹿區" }
+"6602400": { county: "台中市", district: "龍井區" }
+"6602500": { county: "台中市", district: "梧棲區" }
+"6602600": { county: "台中市", district: "清水區" }
+"6602700": { county: "台中市", district: "大甲區" }
+"6602800": { county: "台中市", district: "外埔區" }
+"6602900": { county: "台中市", district: "大安區" }
+
+# ---- 彰化縣 ----
+"10007010": { county: "彰化縣", district: "彰化市" }
+"10007020": { county: "彰化縣", district: "鹿港鎮" }
+"10007030": { county: "彰化縣", district: "和美鎮" }
+"10007040": { county: "彰化縣", district: "線西鄉" }
+"10007050": { county: "彰化縣", district: "伸港鄉" }
+"10007060": { county: "彰化縣", district: "福興鄉" }
+"10007070": { county: "彰化縣", district: "秀水鄉" }
+"10007080": { county: "彰化縣", district: "花壇鄉" }
+"10007090": { county: "彰化縣", district: "芬園鄉" }
+"10007100": { county: "彰化縣", district: "員林市" }
+"10007110": { county: "彰化縣", district: "溪湖鎮" }
+"10007120": { county: "彰化縣", district: "田中鎮" }
+"10007130": { county: "彰化縣", district: "大村鄉" }
+"10007140": { county: "彰化縣", district: "埔鹽鄉" }
+"10007150": { county: "彰化縣", district: "埔心鄉" }
+"10007160": { county: "彰化縣", district: "永靖鄉" }
+"10007170": { county: "彰化縣", district: "社頭鄉" }
+"10007180": { county: "彰化縣", district: "二水鄉" }
+"10007190": { county: "彰化縣", district: "北斗鎮" }
+"10007200": { county: "彰化縣", district: "二林鎮" }
+"10007210": { county: "彰化縣", district: "田尾鄉" }
+"10007220": { county: "彰化縣", district: "埤頭鄉" }
+"10007230": { county: "彰化縣", district: "芳苑鄉" }
+"10007240": { county: "彰化縣", district: "大城鄉" }
+"10007250": { county: "彰化縣", district: "竹塘鄉" }
+"10007260": { county: "彰化縣", district: "溪州鄉" }

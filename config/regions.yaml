@@ -1,0 +1,25 @@
+# Region definition for clipped OSM extracts.
+#
+# tw-central is the only region for now; bbox covers:
+#   - Taichung City (full, including 和平區 in the east)
+#   - Changhua County (full)
+#   - Yunlin / Miaoli / Nantou west-side 20km buffer
+#
+# The eastern bound (121.45°E) extends to cover 台中和平區 entirely.
+
+tw-central:
+  description: 台中市 + 彰化縣 + 雲苗南西側 20km 緩衝
+  bbox:
+    west:  120.20
+    south: 23.55
+    east:  121.45
+    north: 24.75
+  geofabrik_region: asia/taiwan
+  tgos_counties:
+    - taichung
+    - changhua
+  # MOI 縣市代碼 prefix excluded from OSM addr:* ingestion (because TGOS
+  # already covers them at higher quality).
+  exclude_addr_prefixes:
+    - "66"        # 台中市
+    - "10007"     # 彰化縣

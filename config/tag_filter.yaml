@@ -1,0 +1,50 @@
+# OSM tag whitelist for extraction.
+#
+# Anything not on this list is dropped at parse time to keep memory low.
+# Used by extract_townships.py, extract_roads.py, extract_places_osm.py.
+
+# Townships layer (admin_level=8 = 鄉鎮市區 in Taiwan OSM)
+townships:
+  required_tags:
+    boundary: ["administrative"]
+    admin_level: ["8"]   # 鄉鎮市區
+  name_keys:
+    - "name:zh"
+    - "name:zh-Hant"
+    - "name"             # fallback
+
+# Roads layer — only named roads worth showing in reverse-geocode UI.
+roads:
+  highway_values:
+    - motorway
+    - trunk
+    - primary
+    - secondary
+    - tertiary
+    - residential
+    - unclassified
+    - service
+    - living_street
+  required:
+    - name             # only roads that actually carry a name
+  name_keys:
+    - "name:zh"
+    - "name:zh-Hant"
+    - "name"
+
+# Places layer — landmarks and named geography (not addresses).
+# Address data for Taichung+Changhua comes from TGOS; OSM addresses only for
+# Yunlin/Miaoli/Nantou-west.
+places_osm:
+  # Named geographic features kept everywhere in the bbox
+  place_values:
+    - city
+    - town
+    - village
+    - hamlet
+    - suburb
+    - neighbourhood
+  # Address points kept only OUTSIDE Taichung/Changhua (see regions.yaml
+  # exclude_addr_prefixes). These are the "fill-in" for Yunlin/Miaoli/Nantou.
+  addr_required:
+    - "addr:housenumber"

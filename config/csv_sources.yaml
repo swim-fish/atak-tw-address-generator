@@ -1,0 +1,58 @@
+# Per-county TGOS CSV schema mapping.
+#
+# Each key here is a "county_id" used as a subcommand argument:
+#   ./run.sh county taichung
+#   ./run.sh county changhua
+#
+# Field meanings:
+#   path           : path inside the container (mounted from ./input)
+#   encoding       : CSV encoding (UTF-8 in all observed cases)
+#   county_name    : Traditional Chinese county name (Taiwan)
+#   output_sqlite  : output file basename inside /app/output
+#   crs            : EPSG code of the source coordinates
+#                    - EPSG:4326 → WGS84 (lon/lat directly usable)
+#                    - EPSG:3826 → TWD97 / TM2 zone 121 (must reproject)
+#   data_date      : the date the source CSV represents (民國年-月格式)
+#   columns        : map our internal field names to the CSV column headers
+#                    Header names DIFFER between counties (e.g. 「坐」vs「座」),
+#                    so we never hardcode them in scripts — always read here.
+
+taichung:
+  path: input/115年1月GIS門牌_台中市_TGOS__WGS84.CSV
+  encoding: utf-8
+  county_name: 台中市
+  output_sqlite: places-taichung.sqlite
+  crs: EPSG:4326
+  data_date: 115-01
+  expected_rows: 1316674
+  columns:
+    district_code: 鄉鎮市區代碼
+    village: 村里
+    neighbor: 鄰
+    street: 街、路段
+    area: 地區
+    lane: 巷
+    alley: 弄
+    number: 號
+    lon: WGS84經度
+    lat: WGS84緯度
+
+changhua:
+  path: input/彰化縣門牌點位資料1140501.csv
+  encoding: utf-8
+  county_name: 彰化縣
+  output_sqlite: places-changhua.sqlite
+  crs: EPSG:3826      # TWD97 / TM2 zone 121, reproject via pyproj
+  data_date: 114-05
+  expected_rows: 467023
+  columns:
+    district_code: 鄉鎮市區代碼
+    village: 村里
+    neighbor: 鄰
+    street: 街、路段
+    area: 地區
+    lane: 巷
+    alley: 弄
+    number: 號
+    x: 橫座標          # NOTE: 「座」not「坐」(differs from Taichung)
+    y: 縱座標

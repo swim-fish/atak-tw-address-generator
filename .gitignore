@@ -1,0 +1,10 @@
+# User-supplied data and pipeline outputs do not belong in git.
+input/*
+!input/.gitkeep
+cache/*
+!cache/.gitkeep
+output/*
+!output/.gitkeep
+*.pyc
+__pycache__/
+.venv/

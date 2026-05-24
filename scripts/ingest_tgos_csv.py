@@ -16,6 +16,7 @@ import argparse
 import csv
 import hashlib
 import os
+import shutil
 import sqlite3
 import sys
 import time
@@ -90,11 +91,20 @@ CREATE VIRTUAL TABLE places_fts USING fts5(
     tokenize='unicode61'
 );
 
+-- Spatial index for nearest-address reverse geocoding (data-contract v2).
+-- See docs/data-contract.md §5.3.
+CREATE VIRTUAL TABLE places_rtree USING rtree(
+    id, min_lat, max_lat, min_lon, max_lon
+);
+
 CREATE TABLE metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 """
+
+# See docs/data-contract.md §1. Bump on incompatible schema changes.
+SCHEMA_VERSION = "2"
 
 
 # ---------------------------------------------------------------------------
@@ -257,18 +267,26 @@ def ingest(county_id: str, batch_size: int = 10000) -> int:
     if out_path.exists():
         out_path.unlink()
 
+    # Build in /tmp (container overlay fs) — Docker-for-Windows bind mounts
+    # sporadically fail with "disk I/O error" during long sqlite write
+    # workloads. /tmp is single-writer, overlay-backed, and very fast.
+    # Copy to the mount at the end.
+    tmp_path = Path("/tmp") / src["output_sqlite"]
+    if tmp_path.exists():
+        tmp_path.unlink()
+
     is_wgs84 = src["crs"] == "EPSG:4326"
     transformer = None if is_wgs84 else ct._TO_WGS84  # reuse cached transformer
 
     print(f"[{county_id}] CSV: {csv_path.name}")
     print(f"[{county_id}] CRS: {src['crs']} {'(direct)' if is_wgs84 else '(reprojecting)'}")
-    print(f"[{county_id}] Output: {out_path}")
+    print(f"[{county_id}] Build: {tmp_path} → {out_path}")
 
     # SHA-256 source before reading (so it's recorded even if interrupted)
     print(f"[{county_id}] Computing source SHA-256...")
     src_sha = sha256_of_file(csv_path)
 
-    conn = sqlite3.connect(out_path)
+    conn = sqlite3.connect(tmp_path)
     try:
         conn.executescript(SCHEMA_SQL)
 
@@ -321,9 +339,21 @@ def ingest(county_id: str, batch_size: int = 10000) -> int:
         conn.commit()
         print(f"[{county_id}] FTS5 built in {time.time()-t1:.1f}s")
 
+        # Populate spatial R*Tree (each row is a point, so min=max).
+        # Doing this after the FTS5 rebuild because the rebuild scans
+        # the whole table; ordering doesn't matter functionally.
+        print(f"[{county_id}] Populating places_rtree...")
+        t2 = time.time()
+        conn.execute(
+            "INSERT INTO places_rtree (id, min_lat, max_lat, min_lon, max_lon)"
+            " SELECT id, lat, lat, lon, lon FROM places"
+        )
+        conn.commit()
+        print(f"[{county_id}] R*Tree built in {time.time()-t2:.1f}s")
+
         # Metadata
         meta = {
-            "schema_version": "1",
+            "schema_version": SCHEMA_VERSION,
             "source": "tgos",
             "county": src["county_name"],
             "data_date": src["data_date"],
@@ -340,20 +370,25 @@ def ingest(county_id: str, batch_size: int = 10000) -> int:
         )
         conn.commit()
 
-        # VACUUM is deferred to the packaging step (build_manifest.py) because
-        # on Docker-for-Windows bind mounts VACUUM occasionally fails with
-        # "disk I/O error" during journal-replay. ANALYZE is cheap and safe.
-        print(f"[{county_id}] ANALYZE (deferring VACUUM to packaging step)...")
+        # Now in /tmp, VACUUM is safe and shrinks the file.
+        print(f"[{county_id}] VACUUM + ANALYZE...")
         try:
+            conn.execute("VACUUM")
             conn.execute("ANALYZE")
         except sqlite3.OperationalError as e:
-            print(f"[{county_id}] ANALYZE warning: {e}")
+            print(f"[{county_id}] VACUUM/ANALYZE warning: {e}")
 
-        size_mb = out_path.stat().st_size / (1 << 20)
-        print(f"[{county_id}] DONE — {size_mb:.1f} MB at {out_path}")
-        return inserted
+        result_inserted = inserted
     finally:
         conn.close()
+
+    # Move the completed sqlite from /tmp to the mounted output volume.
+    # Use shutil.move (cross-fs falls back to copy + remove), then verify.
+    print(f"[{county_id}] Moving {tmp_path} → {out_path}")
+    shutil.move(str(tmp_path), str(out_path))
+    size_mb = out_path.stat().st_size / (1 << 20)
+    print(f"[{county_id}] DONE — {size_mb:.1f} MB at {out_path}")
+    return result_inserted
 
 
 def main() -> int:

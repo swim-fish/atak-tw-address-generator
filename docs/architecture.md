@@ -42,6 +42,13 @@ path; the `source` column lets the UI annotate row provenance
 `townships.sqlite` and `roads.sqlite` are stand-alone: their R*Tree
 spatial indexes drive offline reverse geocoding.
 
+Since schema version 2 (see [`data-contract.md`](./data-contract.md)),
+the `places-*.sqlite` files also carry a `places_rtree` spatial index so
+plugins can do nearest-address reverse geocoding in < 200 ms against
+1.3M rows. The full plugin-facing schema, naming, and query patterns are
+all documented in [`data-contract.md`](./data-contract.md); when in
+doubt, that file is the canonical source of truth.
+
 ## Name normalisation
 
 OSM frequently uses the older glyph 「臺」 (in 臺中市 / 臺北市 / 臺南市

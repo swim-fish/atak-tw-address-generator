@@ -18,6 +18,7 @@ The output schema matches ``places-<county>.sqlite`` so the plugin can
 from __future__ import annotations
 
 import argparse
+import shutil
 import sqlite3
 import sys
 import time
@@ -73,11 +74,19 @@ CREATE VIRTUAL TABLE places_fts USING fts5(
     tokenize='unicode61'
 );
 
+-- Spatial index for nearest-address reverse geocoding (data-contract v2).
+CREATE VIRTUAL TABLE places_rtree USING rtree(
+    id, min_lat, max_lat, min_lon, max_lon
+);
+
 CREATE TABLE metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 """
+
+# See docs/data-contract.md §1.
+SCHEMA_VERSION = "2"
 
 
 def name_zh(tags: dict) -> str | None:
@@ -152,7 +161,13 @@ def main() -> int:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if out.exists():
         out.unlink()
-    conn = sqlite3.connect(str(out))
+    # Build in /tmp (overlay fs) to dodge Docker-for-Windows bind-mount
+    # I/O flakiness during long sqlite writes.
+    tmp = Path("/tmp/places-osm.sqlite")
+    if tmp.exists():
+        tmp.unlink()
+    print(f"[places-osm] build path: {tmp} → {out}")
+    conn = sqlite3.connect(str(tmp))
     conn.executescript(SCHEMA_SQL)
 
     landmarks = 0
@@ -219,8 +234,17 @@ def main() -> int:
     conn.commit()
     print(f"[places-osm]   FTS5 built in {time.time() - t1:.1f}s")
 
+    print(f"[places-osm] populating places_rtree...")
+    t2 = time.time()
+    conn.execute(
+        "INSERT INTO places_rtree (id, min_lat, max_lat, min_lon, max_lon)"
+        " SELECT id, lat, lat, lon, lon FROM places"
+    )
+    conn.commit()
+    print(f"[places-osm]   R*Tree built in {time.time() - t2:.1f}s")
+
     meta = {
-        "schema_version": "1",
+        "schema_version": SCHEMA_VERSION,
         "source": "osm-clipped",
         "region": args.region,
         "bbox": f"{bbox['west']},{bbox['south']},{bbox['east']},{bbox['north']}",
@@ -232,10 +256,14 @@ def main() -> int:
     conn.executemany("INSERT INTO metadata (key, value) VALUES (?, ?)", list(meta.items()))
     conn.commit()
     try:
+        conn.execute("VACUUM")
         conn.execute("ANALYZE")
     except sqlite3.OperationalError as e:
-        print(f"[places-osm] ANALYZE warning: {e}")
+        print(f"[places-osm] VACUUM/ANALYZE warning: {e}")
     conn.close()
+
+    print(f"[places-osm] moving {tmp} → {out}")
+    shutil.move(str(tmp), str(out))
 
     size = out.stat().st_size / (1 << 20)
     print(f"[places-osm] OK — {out} ({size:.1f} MiB)")

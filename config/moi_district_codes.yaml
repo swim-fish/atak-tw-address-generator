@@ -1,46 +1,45 @@
 # MOI 鄉鎮市區代碼 → 縣市/鄉鎮市區名稱對照
 #
-# 此檔混合處理：
+# 規則：
 #   - 直轄市制 7 位代碼（前 2 位為縣市代碼 + 3 位區碼 + 00 補位）
 #   - 縣市制 8 位代碼（前 5 位為縣市代碼 + 3 位區碼）
 #
-# 直接用字串 key 查詢，不要對長度做假設。
-#
-# 名稱已對照 CSV 樣本中的 村里 命名規則（里=市鎮、村=鄉）驗證一致。
-# 若未來發現不符，於 verification report 中會出現對應的 polygon-in 失敗。
+# 此表由 polygon-in 反查產生：取每個 district_code 的 CSV 樣本座標，
+# 對 OSM admin_level=7/8 多邊形做 covers() 測試，得到權威的代碼→區名映射。
+# 不要手工排序，因為 MOI 內政部戶政司的編碼順序非字母/地理連續。
 
-# ---- 台中市（直轄市） ----
+# ---- 台中市（直轄市，level=7 區）----
 "6600100": { county: "台中市", district: "中區" }
 "6600200": { county: "台中市", district: "東區" }
 "6600300": { county: "台中市", district: "南區" }
 "6600400": { county: "台中市", district: "西區" }
 "6600500": { county: "台中市", district: "北區" }
-"6600600": { county: "台中市", district: "北屯區" }
-"6600700": { county: "台中市", district: "西屯區" }
-"6600800": { county: "台中市", district: "南屯區" }
-"6600900": { county: "台中市", district: "太平區" }
-"6601000": { county: "台中市", district: "大里區" }
-"6601100": { county: "台中市", district: "霧峰區" }
-"6601200": { county: "台中市", district: "烏日區" }
-"6601300": { county: "台中市", district: "豐原區" }
-"6601400": { county: "台中市", district: "后里區" }
-"6601500": { county: "台中市", district: "石岡區" }
-"6601600": { county: "台中市", district: "東勢區" }
-"6601700": { county: "台中市", district: "和平區" }
-"6601800": { county: "台中市", district: "新社區" }
-"6601900": { county: "台中市", district: "潭子區" }
-"6602000": { county: "台中市", district: "大雅區" }
-"6602100": { county: "台中市", district: "神岡區" }
-"6602200": { county: "台中市", district: "大肚區" }
-"6602300": { county: "台中市", district: "沙鹿區" }
-"6602400": { county: "台中市", district: "龍井區" }
-"6602500": { county: "台中市", district: "梧棲區" }
-"6602600": { county: "台中市", district: "清水區" }
-"6602700": { county: "台中市", district: "大甲區" }
-"6602800": { county: "台中市", district: "外埔區" }
-"6602900": { county: "台中市", district: "大安區" }
+"6600600": { county: "台中市", district: "西屯區" }
+"6600700": { county: "台中市", district: "南屯區" }
+"6600800": { county: "台中市", district: "北屯區" }
+"6600900": { county: "台中市", district: "豐原區" }
+"6601000": { county: "台中市", district: "東勢區" }
+"6601100": { county: "台中市", district: "大甲區" }
+"6601200": { county: "台中市", district: "清水區" }
+"6601300": { county: "台中市", district: "沙鹿區" }
+"6601400": { county: "台中市", district: "梧棲區" }
+"6601500": { county: "台中市", district: "后里區" }
+"6601600": { county: "台中市", district: "神岡區" }
+"6601700": { county: "台中市", district: "潭子區" }
+"6601800": { county: "台中市", district: "大雅區" }
+"6601900": { county: "台中市", district: "新社區" }
+"6602000": { county: "台中市", district: "石岡區" }
+"6602100": { county: "台中市", district: "外埔區" }
+"6602200": { county: "台中市", district: "大安區" }
+"6602300": { county: "台中市", district: "烏日區" }
+"6602400": { county: "台中市", district: "大肚區" }
+"6602500": { county: "台中市", district: "龍井區" }
+"6602600": { county: "台中市", district: "霧峰區" }
+"6602700": { county: "台中市", district: "太平區" }
+"6602800": { county: "台中市", district: "大里區" }
+"6602900": { county: "台中市", district: "和平區" }
 
-# ---- 彰化縣 ----
+# ---- 彰化縣（縣轄，level=8 鄉鎮市）----
 "10007010": { county: "彰化縣", district: "彰化市" }
 "10007020": { county: "彰化縣", district: "鹿港鎮" }
 "10007030": { county: "彰化縣", district: "和美鎮" }

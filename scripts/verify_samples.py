@@ -29,6 +29,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import shapely.wkb
+from shapely.geometry import Point
 import yaml
 
 import coord_transform as ct
@@ -160,10 +162,62 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(math.sqrt(a))
 
 
+# ---------------------------------------------------------------------------
+# Township polygon helpers (iteration 2)
+# ---------------------------------------------------------------------------
+
+def _load_township_index(townships_db: Path) -> dict[tuple[int, str], list]:
+    """Build {(admin_level, name_zh): [(min_lat,max_lat,min_lon,max_lon, geom)]}.
+
+    Pre-loading is fast — at most a few hundred polygons.
+    """
+    conn = sqlite3.connect(str(townships_db))
+    index: dict[tuple[int, str], list] = defaultdict(list)
+    rows = conn.execute(
+        "SELECT t.admin_level, t.name_zh, t.geometry_wkb,"
+        "       r.min_lat, r.max_lat, r.min_lon, r.max_lon"
+        " FROM townships t JOIN townships_rtree r ON r.id = t.id"
+    ).fetchall()
+    conn.close()
+    for lvl, name, wkb, mn_lat, mx_lat, mn_lon, mx_lon in rows:
+        geom = shapely.wkb.loads(wkb)
+        index[(lvl, name)].append((mn_lat, mx_lat, mn_lon, mx_lon, geom))
+    return index
+
+
+def _point_in_township(
+    townships_idx: dict, level: int, name: str, lat: float, lon: float,
+) -> bool:
+    polys = townships_idx.get((level, name))
+    if not polys:
+        return False
+    pt = Point(lon, lat)
+    for mn_lat, mx_lat, mn_lon, mx_lon, geom in polys:
+        if mn_lat <= lat <= mx_lat and mn_lon <= lon <= mx_lon:
+            if geom.covers(pt):
+                return True
+    return False
+
+
+def _reverse_township_lookup(
+    townships_idx: dict, lat: float, lon: float, level: int,
+) -> str | None:
+    pt = Point(lon, lat)
+    for (lvl, name), polys in townships_idx.items():
+        if lvl != level:
+            continue
+        for mn_lat, mx_lat, mn_lon, mx_lon, geom in polys:
+            if mn_lat <= lat <= mx_lat and mn_lon <= lon <= mx_lon:
+                if geom.covers(pt):
+                    return name
+    return None
+
+
 def check_sample(
     conn: sqlite3.Connection,
     s: Sample,
     code_table: dict,
+    townships_idx: dict | None = None,
 ) -> dict[str, tuple[bool, str]]:
     """Run the iteration-1 checks against one sample. Returns {check: (ok, detail)}."""
     results: dict[str, tuple[bool, str]] = {}
@@ -220,6 +274,24 @@ def check_sample(
     ok5 = hits >= 1
     results["fts5_search"] = (ok5, f"hits={hits}" if not ok5 else "")
 
+    # 3 + 6: polygon-in + reverse-township (iteration 2 — needs townships.sqlite)
+    if townships_idx is not None:
+        expected_township = mapping.get("district", "")
+        ok3 = _point_in_township(townships_idx, 8, expected_township, s.lat, s.lon)
+        # 直轄市的區 are admin_level=7; 縣轄鄉鎮市 are admin_level=8. Try both.
+        if not ok3:
+            ok3 = _point_in_township(townships_idx, 7, expected_township, s.lat, s.lon)
+        results["polygon_in"] = (ok3, f"({s.lat:.5f},{s.lon:.5f}) not in {expected_township}"
+                                 if not ok3 else "")
+
+        # Reverse: which township polygon contains this point?
+        rev = (_reverse_township_lookup(townships_idx, s.lat, s.lon, 8)
+               or _reverse_township_lookup(townships_idx, s.lat, s.lon, 7))
+        ok6 = rev == expected_township
+        results["reverse_township"] = (
+            ok6, f"got {rev!r} want {expected_township!r}" if not ok6 else ""
+        )
+
     return results
 
 
@@ -228,9 +300,10 @@ def check_sample(
 # ---------------------------------------------------------------------------
 
 CHECKS_ITER1 = ("coverage", "coord_match", "display_name", "fts5_search")
+CHECKS_ITER2 = CHECKS_ITER1 + ("polygon_in", "reverse_township")
 
 
-def verify_county(county_id: str, n: int = 50) -> int:
+def verify_county(county_id: str, n: int = 50, *, townships_db: Path | None = None) -> int:
     """Run all checks for one county. Returns count of failed samples."""
     config = yaml.safe_load((CONFIG_DIR / "csv_sources.yaml").read_text("utf-8"))
     code_table = yaml.safe_load((CONFIG_DIR / "moi_district_codes.yaml").read_text("utf-8"))
@@ -244,6 +317,13 @@ def verify_county(county_id: str, n: int = 50) -> int:
         print(f"  SKIP: {db_path} not found yet (run ./run.sh county {county_id} first)")
         return -1
 
+    townships_idx = None
+    active_checks = CHECKS_ITER1
+    if townships_db and townships_db.exists():
+        print(f"  townships  : {townships_db}")
+        townships_idx = _load_township_index(townships_db)
+        active_checks = CHECKS_ITER2
+
     sampled = load_county_samples(county_id, n=n)
     counts: dict[str, dict[str, CheckResult]] = defaultdict(lambda: defaultdict(CheckResult))
 
@@ -251,7 +331,7 @@ def verify_county(county_id: str, n: int = 50) -> int:
     try:
         for direction in DIRECTIONS:
             for s in sampled[direction]:
-                res = check_sample(conn, s, code_table)
+                res = check_sample(conn, s, code_table, townships_idx)
                 for ck, (ok, detail) in res.items():
                     counts[ck][direction].add(ok, detail=detail)
     finally:
@@ -261,7 +341,7 @@ def verify_county(county_id: str, n: int = 50) -> int:
     headers = [f"{county_id[:3].title()}-{d[0].upper()}" for d in DIRECTIONS]
     print(f"\n  {'check':<18s}" + "".join(f"{h:>10s}" for h in headers))
     total_failed = 0
-    for ck in CHECKS_ITER1:
+    for ck in active_checks:
         cells = []
         for d in DIRECTIONS:
             r = counts[ck][d]
@@ -277,13 +357,13 @@ def verify_county(county_id: str, n: int = 50) -> int:
         w = csv.writer(f)
         w.writerow(["check", "direction", "district_code", "village", "neighbor",
                     "street", "area", "lane", "alley", "number", "lat", "lon", "detail"])
-        for ck in CHECKS_ITER1:
+        for ck in active_checks:
             for d in DIRECTIONS:
                 r = counts[ck][d]
                 samples_in_dir = sampled[d]
                 conn = sqlite3.connect(str(db_path))
                 for s in samples_in_dir:
-                    sr = check_sample(conn, s, code_table)
+                    sr = check_sample(conn, s, code_table, townships_idx)
                     ok, detail = sr[ck]
                     if not ok:
                         w.writerow([ck, d, s.district_code, s.village, s.neighbor,
@@ -294,7 +374,7 @@ def verify_county(county_id: str, n: int = 50) -> int:
     if total_failed > 0:
         print(f"  → failure detail: {failure_csv}")
     else:
-        print(f"  ✅ all {len(DIRECTIONS)*n*len(CHECKS_ITER1):,} checks passed")
+        print(f"  ✅ all {len(DIRECTIONS)*n*len(active_checks):,} checks passed")
     return total_failed
 
 
@@ -302,15 +382,23 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--county", help="If omitted, verify all counties in csv_sources.yaml")
     p.add_argument("-n", type=int, default=50, help="Samples per direction (default 50)")
+    p.add_argument("--no-townships", action="store_true",
+                   help="Skip iteration-2 polygon checks even if townships.sqlite exists")
     args = p.parse_args()
 
+    townships_db = None
+    if not args.no_townships:
+        candidate = OUTPUT_DIR / "townships.sqlite"
+        if candidate.exists():
+            townships_db = candidate
+
     if args.county:
-        rc = verify_county(args.county, n=args.n)
+        rc = verify_county(args.county, n=args.n, townships_db=townships_db)
     else:
         config = yaml.safe_load((CONFIG_DIR / "csv_sources.yaml").read_text("utf-8"))
         total = 0
         for county_id in config:
-            r = verify_county(county_id, n=args.n)
+            r = verify_county(county_id, n=args.n, townships_db=townships_db)
             if r > 0:
                 total += r
         rc = total

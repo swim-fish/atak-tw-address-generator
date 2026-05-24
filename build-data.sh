@@ -25,7 +25,15 @@ shift || true
 case "$SUBCOMMAND" in
     base)
         log "Subcommand: base (OSM-derived townships + roads + places-osm)"
-        log "TODO step 6/8 — invoke clip_pbf.py, extract_townships.py, extract_roads.py, extract_places_osm.py"
+        REFRESH_FLAG=""
+        if [ "${1:-}" = "--no-refresh" ]; then
+            REFRESH_FLAG="--no-refresh"
+            shift
+        fi
+        python3 /app/scripts/clip_pbf.py $REFRESH_FLAG 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/extract_townships.py 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/extract_roads.py 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/extract_places_osm.py 2>&1 | tee -a "$LOG_FILE"
         ;;
     county)
         if [ -z "${1:-}" ]; then
@@ -38,7 +46,23 @@ case "$SUBCOMMAND" in
         ;;
     all)
         log "Subcommand: all (base + counties + full bundle)"
-        log "TODO orchestrate: base → counties → tw-central-full.zip"
+        REFRESH_FLAG=""
+        if [ "${1:-}" = "--no-refresh" ]; then
+            REFRESH_FLAG="--no-refresh"
+            shift
+        fi
+        python3 /app/scripts/clip_pbf.py $REFRESH_FLAG 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/extract_townships.py 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/extract_roads.py 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/extract_places_osm.py 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/ingest_tgos_csv.py --county taichung 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/ingest_tgos_csv.py --county changhua 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/verify_samples.py 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/build_manifest.py 2>&1 | tee -a "$LOG_FILE"
+        ;;
+    pack)
+        log "Subcommand: pack (manifest + ZIPs only)"
+        python3 /app/scripts/build_manifest.py 2>&1 | tee -a "$LOG_FILE"
         ;;
     verify)
         log "Subcommand: verify"

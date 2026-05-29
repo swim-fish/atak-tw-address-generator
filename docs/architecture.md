@@ -69,6 +69,26 @@ via `scripts/coord_transform.py` self-test, and ground-truth landmark
 checks come from the TGOS Taichung CSV (which carries both coordinate
 systems for every row — the data itself is the projection's reference).
 
+## Address reduction (two stages)
+
+Once per-county ingest is done, two reduction passes run by default:
+
+1. `scripts/dedup_floors.py` — drops `N樓之M` / `地下N層之K` rows that
+   share a coordinate with a ground-floor row. Keeps every distinct
+   ground-floor row.
+2. `scripts/collapse_coords.py` — collapses each remaining same-coord
+   group to one row, preferring the shortest `number` (biases toward
+   building main door).
+
+The end result is a strict invariant: **at most one row per
+coordinate**. Taichung loses ~44 % of its rows, Changhua ~8 %. Strategy
+details, metadata layout, and current counts are in
+[`dedup-floors-report.md`](./dedup-floors-report.md).
+
+The verifier (`verify_samples.py`) skips CSV rows whose `number`
+contains 樓/層 so its sampling stays aligned with what survives
+stage 1.
+
 ## Verification
 
 The verifier (`verify_samples.py`) is the single most important quality

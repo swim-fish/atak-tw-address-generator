@@ -111,6 +111,12 @@ def load_county_samples(county_id: str, n: int = 50) -> dict[str, list[Sample]]:
             number = row.get(cols["number"], "").strip()
             if not number:
                 continue  # skip CSV-empty 號 rows
+            # Skip rows that the dedup_floors stage removes (same-coord
+            # floor variants). The ingested sqlite only retains one row per
+            # coord, preferring numbers without 樓/層 — so sampling those
+            # would produce spurious coverage failures.
+            if "樓" in number or "層" in number:
+                continue
             district_code = row[cols["district_code"]].strip()
             village = row.get(cols["village"], "").strip()
             neighbor = row.get(cols["neighbor"], "").strip()

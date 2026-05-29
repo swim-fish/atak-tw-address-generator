@@ -139,8 +139,16 @@ Required `metadata` keys:
 | `county` | `'台中市'` | TGOS only |
 | `data_date` | `'115-01'` | TGOS only; 民國年-月 |
 | `csv_sha256` | hex | TGOS only |
-| `inserted` | `'1316671'` | row count |
+| `inserted` | `'731005'` | row count *(refreshed after each reduction stage; equals the actual row count in `places`)* |
 | `skipped_dirty` | `'1'` | TGOS only; rows excluded per `dirty_data.yaml` (see [`dirty-data-report.md`](./dirty-data-report.md)) |
+| `deduped_at` | `'2026-05-27T14:37:00Z'` | TGOS only; UTC timestamp of stage 1 (floor dedup) |
+| `deduped_removed` | `'550561'` | TGOS only; floor rows removed in stage 1 (see [`dedup-floors-report.md`](./dedup-floors-report.md)) |
+| `deduped_strategy` | `'drop-floor-rows-when-ground-floor-exists;keep-lowest-id-otherwise'` | TGOS only; stage-1 rule tag |
+| `deduped_inserted_orig` | `'1316671'` | TGOS only; pre-stage-1 row count |
+| `collapsed_at` | `'2026-05-27T14:50:14Z'` | TGOS only; UTC timestamp of stage 2 (same-coord collapse) |
+| `collapsed_removed` | `'35105'` | TGOS only; same-coord duplicates removed in stage 2 |
+| `collapsed_strategy` | `'one-row-per-coord;shortest-number;lowest-id'` | TGOS only; stage-2 rule tag |
+| `collapsed_inserted_pre` | `'766110'` | TGOS only; post-stage-1, pre-stage-2 row count |
 | `region` | `'tw-central'` | OSM only |
 | `bbox` | `'120.20,23.55,121.45,24.75'` | OSM only |
 
@@ -364,6 +372,27 @@ Contents:
 ---
 
 ## 7. CHANGELOG
+
+### `2` — 2026-05-27 (additive metadata)
+
+- TGOS `places-*.sqlite` files now ship with **two reduction stages**
+  applied before packaging:
+  - Stage 1: floor-level rows (`number LIKE '%樓%' OR '%層%'`) that
+    share a coord with a ground-floor row are removed.
+  - Stage 2: each remaining same-coord group is collapsed to one row
+    (kept row = shortest `number`, ties by lowest `id`).
+  - Net invariant: at most one row per `(lat, lon)`.
+- Schema **unchanged**.
+- New informational `metadata` keys on TGOS files:
+  - `deduped_at`, `deduped_removed`, `deduped_strategy`,
+    `deduped_inserted_orig` (stage 1)
+  - `collapsed_at`, `collapsed_removed`, `collapsed_strategy`,
+    `collapsed_inserted_pre` (stage 2)
+  - See [`dedup-floors-report.md`](./dedup-floors-report.md) for the
+    rule and current counts.
+- `metadata.inserted` is refreshed after each stage so it always equals
+  `COUNT(*) FROM places`. Plugins that already trust `inserted` need
+  no change.
 
 ### `2` — 2026-05-24
 

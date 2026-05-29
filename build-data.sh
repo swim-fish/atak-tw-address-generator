@@ -41,24 +41,72 @@ case "$SUBCOMMAND" in
             exit 1
         fi
         COUNTY="$1"
-        log "Subcommand: county $COUNTY"
+        shift
+        NO_DEDUP=0
+        NO_COLLAPSE=0
+        while [ -n "${1:-}" ]; do
+            case "$1" in
+                --no-dedup)    NO_DEDUP=1; shift ;;
+                --no-collapse) NO_COLLAPSE=1; shift ;;
+                *) break ;;
+            esac
+        done
+        log "Subcommand: county $COUNTY (dedup=$([ $NO_DEDUP -eq 1 ] && echo off || echo on), collapse=$([ $NO_COLLAPSE -eq 1 ] && echo off || echo on))"
         python3 /app/scripts/ingest_tgos_csv.py --county "$COUNTY" 2>&1 | tee -a "$LOG_FILE"
+        if [ "$NO_DEDUP" -eq 0 ]; then
+            python3 /app/scripts/dedup_floors.py \
+                --db "/app/output/places-${COUNTY}.sqlite" --apply 2>&1 | tee -a "$LOG_FILE"
+        fi
+        if [ "$NO_COLLAPSE" -eq 0 ]; then
+            python3 /app/scripts/collapse_coords.py \
+                --db "/app/output/places-${COUNTY}.sqlite" --apply 2>&1 | tee -a "$LOG_FILE"
+        fi
         ;;
     all)
-        log "Subcommand: all (base + counties + full bundle)"
+        log "Subcommand: all (base + counties + dedup + collapse + full bundle)"
         REFRESH_FLAG=""
-        if [ "${1:-}" = "--no-refresh" ]; then
-            REFRESH_FLAG="--no-refresh"
-            shift
-        fi
+        NO_DEDUP=0
+        NO_COLLAPSE=0
+        while [ -n "${1:-}" ]; do
+            case "$1" in
+                --no-refresh)  REFRESH_FLAG="--no-refresh"; shift ;;
+                --no-dedup)    NO_DEDUP=1; shift ;;
+                --no-collapse) NO_COLLAPSE=1; shift ;;
+                *) break ;;
+            esac
+        done
         python3 /app/scripts/clip_pbf.py $REFRESH_FLAG 2>&1 | tee -a "$LOG_FILE"
         python3 /app/scripts/extract_townships.py 2>&1 | tee -a "$LOG_FILE"
         python3 /app/scripts/extract_roads.py 2>&1 | tee -a "$LOG_FILE"
         python3 /app/scripts/extract_places_osm.py 2>&1 | tee -a "$LOG_FILE"
         python3 /app/scripts/ingest_tgos_csv.py --county taichung 2>&1 | tee -a "$LOG_FILE"
         python3 /app/scripts/ingest_tgos_csv.py --county changhua 2>&1 | tee -a "$LOG_FILE"
+        if [ "$NO_DEDUP" -eq 0 ]; then
+            python3 /app/scripts/dedup_floors.py --apply 2>&1 | tee -a "$LOG_FILE"
+        fi
+        if [ "$NO_COLLAPSE" -eq 0 ]; then
+            python3 /app/scripts/collapse_coords.py --apply 2>&1 | tee -a "$LOG_FILE"
+        fi
         python3 /app/scripts/verify_samples.py 2>&1 | tee -a "$LOG_FILE"
         python3 /app/scripts/build_manifest.py 2>&1 | tee -a "$LOG_FILE"
+        ;;
+    dedup)
+        log "Subcommand: dedup (remove same-coord floor duplicates)"
+        APPLY_FLAG="--apply"
+        if [ "${1:-}" = "--dry-run" ]; then
+            APPLY_FLAG=""
+            shift
+        fi
+        python3 /app/scripts/dedup_floors.py $APPLY_FLAG "$@" 2>&1 | tee -a "$LOG_FILE"
+        ;;
+    collapse)
+        log "Subcommand: collapse (one row per coord; shortest number wins)"
+        APPLY_FLAG="--apply"
+        if [ "${1:-}" = "--dry-run" ]; then
+            APPLY_FLAG=""
+            shift
+        fi
+        python3 /app/scripts/collapse_coords.py $APPLY_FLAG "$@" 2>&1 | tee -a "$LOG_FILE"
         ;;
     pack)
         log "Subcommand: pack (manifest + ZIPs only)"
@@ -69,7 +117,7 @@ case "$SUBCOMMAND" in
         python3 /app/scripts/verify_samples.py "$@" 2>&1 | tee -a "$LOG_FILE"
         ;;
     *)
-        echo "Error: unknown subcommand '$SUBCOMMAND'. Valid: base|county|all|verify" >&2
+        echo "Error: unknown subcommand '$SUBCOMMAND'. Valid: base|county|all|dedup|collapse|verify|pack" >&2
         exit 1
         ;;
 esac

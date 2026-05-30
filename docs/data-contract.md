@@ -26,6 +26,7 @@ SELECT value FROM metadata WHERE key = 'schema_version';
 |---|---|---|
 | `1` | 2026-05-24 | Initial layout: `places`, `places_fts`, `townships`, `townships_rtree`, `roads`, `roads_rtree` |
 | `2` | 2026-05-24 | **Adds `places_rtree`** for fast nearest-address lookup |
+| `3` | 2026-05-30 | **Adds `area` to `places_fts`** — empty-street addresses become searchable by their 地區 locality name (e.g. 十甲巷, 介壽新村). Additive & non-breaking: existing `street`/`township`/full-string queries are unchanged. See [`address-search-guide.md`](./address-search-guide.md). |
 
 > **2026-05-30 — `townships.sqlite` re-sourced (no `schema_version` bump).**
 > The townships layer now comes from the MOI authoritative boundary
@@ -123,10 +124,10 @@ CREATE INDEX idx_places_lookup ON places(
 CREATE INDEX idx_places_county  ON places(county);    -- places-osm only
 
 CREATE VIRTUAL TABLE places_fts USING fts5(
-    name, display_name, display_name_halfwidth, street, township,
-    content='places',
+    name, display_name, display_name_halfwidth, street, area, township,
+    content='places',                 -- `area` added in schema v3
     content_rowid='id',
-    tokenize='unicode61'              -- CJK = per-character tokens
+    tokenize='unicode61'              -- a contiguous CJK run = ONE token (NOT per-char)
 );
 
 -- *** NEW in v2: spatial index for nearest-address lookup ***
@@ -146,7 +147,7 @@ Required `metadata` keys:
 
 | Key | Example | Notes |
 |---|---|---|
-| `schema_version` | `'2'` | Plugins MUST read this |
+| `schema_version` | `'3'` | Plugins MUST read this |
 | `source` | `'tgos'` or `'osm'` | Provenance of the whole file |
 | `county` | `'台中市'` | TGOS only |
 | `data_date` | `'115-01'` | TGOS only; 民國年-月 |
@@ -367,16 +368,37 @@ SELECT display_name, lat, lon FROM places WHERE district_code = ?;
 
 ```sql
 -- Sanitise the user input (strip FTS5 punctuation: " * ( ) - : ' \).
--- Then phrase-quote:
 SELECT p.id, p.display_name, p.lat, p.lon
 FROM places p
 WHERE p.id IN (
     SELECT rowid FROM places_fts WHERE places_fts MATCH ?
 )
 LIMIT 50;
--- Pass query as e.g. '"鹿港中山路"'. The unicode61 tokenizer treats CJK
--- characters as individual tokens, so phrase queries match contiguously.
 ```
+
+**Tokenizer reality (read this).** `unicode61` makes a *contiguous run of CJK*
+a **single token**, not one token per character — so `MATCH` is whole-token /
+prefix, never mid-string substring. A short column value (`大誠街`, `十甲巷`,
+`中區`) is its own token because `street` / `area` / `township` are indexed
+columns; a value buried inside `display_name` (e.g. a 村里) is not separately
+matchable. Build queries accordingly:
+
+| User intent | Bind value | Matches |
+|---|---|---|
+| Autocomplete / partial head | `大誠街*` (append `*`) | prefix of `name` / `display_name_halfwidth` head |
+| Exact street / area / township | `"大誠街"` / `"十甲巷"` / `"中區"` | the indexed column's whole token |
+| Full address round-trip | `"台中市東區十甲里十甲巷30弄7號"` | the one exact row |
+
+Use `display_name_halfwidth` / `name` for matching (convert the user's
+fullwidth digits to halfwidth and `之`→`-` first), and `display_name` for
+display. For mid-string substrings (e.g. a 村里 inside the address) FTS5 cannot
+help — pre-filter by `district_code` and `LIKE '%…%'`, or adopt a `trigram`
+index (deferred fix 2b). Full guidance: [`address-search-guide.md`](./address-search-guide.md).
+
+> **Empty-street addresses (schema v3).** ~1.9 % of Taichung and ~10 % of
+> Changhua rows have `street IS NULL` and are located by a named 巷/莊/新村 in
+> `area`. Since v3, `area` is an FTS column, so `"十甲巷"` / `"介壽新村"` match
+> directly (they returned 0 on v1/v2). Reverse geocoding always worked for them.
 
 For numeric address fragments (e.g. user typed `100號`), prefer matching
 against `display_name_halfwidth` and quote the entire phrase.
@@ -416,6 +438,21 @@ Contents:
 ---
 
 ## 7. CHANGELOG
+
+### `3` — 2026-05-30 (searchable `area`)
+
+- Add `area` to `places_fts` on all `places-*.sqlite` files, so empty-street
+  addresses (located by a named 巷/莊/新村 in `地區`, e.g. 十甲巷, 介壽新村)
+  are matchable by their locality name. `"十甲巷"` / `"介壽新村"` returned 0 on
+  v1/v2 and return hits on v3.
+- Bump `metadata.schema_version` from `'2'` to `'3'`.
+- **Additive & non-breaking**: existing `street` / `township` / full-string
+  queries return identical results; v3 only adds matchable `area` tokens.
+- Existing artifacts upgraded in place by `scripts/migrate_fts_add_area.py`
+  (no full rebuild); fresh builds produce v3 directly. Corrects the earlier
+  (false) "unicode61 = per-character CJK tokens" claim — a contiguous CJK run
+  is one token. See [`empty-street-fts-report.md`](./empty-street-fts-report.md)
+  and [`address-search-guide.md`](./address-search-guide.md).
 
 ### `2` — 2026-05-27 (additive metadata)
 

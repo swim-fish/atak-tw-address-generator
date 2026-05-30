@@ -375,7 +375,9 @@ def check_sample(
     results["display_name"] = (ok4, detail4)
 
     # 5. FTS5 search by halfwidth display name (use phrase-style quoted query).
-    # FTS5 unicode61 tokenizer treats CJK chars as individual tokens.
+    # NOTE: unicode61 makes a contiguous CJK run ONE token (not per-char), so
+    # this check passes by matching the FULL display string as a phrase. It does
+    # NOT exercise partial/area-name search — see docs/empty-street-fts-report.md.
     safe = want_hw.replace('"', '""')
     cur = conn.execute(
         "SELECT count(*) FROM places_fts WHERE places_fts MATCH ?",

@@ -27,6 +27,18 @@ SELECT value FROM metadata WHERE key = 'schema_version';
 | `1` | 2026-05-24 | Initial layout: `places`, `places_fts`, `townships`, `townships_rtree`, `roads`, `roads_rtree` |
 | `2` | 2026-05-24 | **Adds `places_rtree`** for fast nearest-address lookup |
 
+> **2026-05-30 — `townships.sqlite` re-sourced (no `schema_version` bump).**
+> The townships layer now comes from the MOI authoritative boundary
+> shapefiles (release 1140318) instead of OSM admin polygons. In the
+> `townships` table, `osm_id` is replaced by `moi_code TEXT` and a new
+> nullable `county_zh TEXT` carries the parent 縣市 inline (see §3.2).
+> The R*Tree, `admin_level` semantics, and `name_zh` (bare, 「臺」→「台」)
+> are unchanged, and no consumer ever read `osm_id`, so the table stays
+> `schema_version` `1`; provenance is distinguished by
+> `metadata.source` (`'moi-shapefile'` vs the former `'osm-clipped'`).
+> Plugins SHOULD read `county_zh` from the level-7/8 hit and treat the
+> level-4 query as a fallback.
+
 ### Forward / backward compatibility rules
 
 - **Additive changes** (new optional table, new optional column) → minor
@@ -157,18 +169,25 @@ Required `metadata` keys:
 Multi-level admin polygons. Plugins resolve "what 鄉鎮市區 / 縣市 am I
 in?" via R*Tree bbox prefilter + WKB polygon-in test.
 
+Source: the MOI authoritative boundary shapefiles (內政部 直轄市/縣市界線
++ 鄉鎮市區界線, release 1140318) — the legal ground truth, not an OSM
+approximation. Coordinates are GCS_TWD97[2020]; the datum offset from
+WGS84 is sub-metre, so they are stored verbatim as WGS84 lon/lat.
+
 ```sql
 CREATE TABLE townships (
     id INTEGER PRIMARY KEY,
-    osm_id INTEGER NOT NULL,
+    moi_code TEXT NOT NULL,           -- MOI COUNTYCODE / TOWNCODE (provenance)
     admin_level INTEGER NOT NULL,     -- 4=縣市, 7=直轄市區, 8=縣轄鄉鎮市
-    name_zh TEXT NOT NULL,            -- normalised 「臺」→「台」
+    name_zh TEXT NOT NULL,            -- bare name, normalised 「臺」→「台」
     name_en TEXT,
+    county_zh TEXT,                   -- parent 縣市 for level 7/8; NULL for level 4
     geometry_wkb BLOB NOT NULL        -- multipolygon, WGS84
 );
 
-CREATE INDEX idx_townships_level ON townships(admin_level);
-CREATE INDEX idx_townships_name  ON townships(name_zh);
+CREATE INDEX idx_townships_level  ON townships(admin_level);
+CREATE INDEX idx_townships_name   ON townships(name_zh);
+CREATE INDEX idx_townships_county ON townships(county_zh);
 
 CREATE VIRTUAL TABLE townships_rtree USING rtree(
     id, min_lat, max_lat, min_lon, max_lon
@@ -177,8 +196,14 @@ CREATE VIRTUAL TABLE townships_rtree USING rtree(
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ```
 
-Metadata: `schema_version`, `source='osm-clipped'`, `region`, `bbox`,
-`inserted_level4`, `inserted_level7`, `inserted_level8`.
+`county_zh` carries the parent 縣市 inline on every 鄉鎮市區 row (MOI ships
+it per feature), so a single level-7/8 polygon hit yields both halves of
+「彰化縣鹿港鎮」 — the level-4 lookup in §5.1 becomes an optional
+cross-check rather than a required second query.
+
+Metadata: `schema_version`, `source='moi-shapefile'`, `boundary_release`
+(e.g. `'1140318'`), `region`, `bbox`, `inserted_level4`,
+`inserted_level7`, `inserted_level8`.
 
 ### 3.3 `roads.sqlite`
 
@@ -267,20 +292,39 @@ during `verify_samples.py`. Plugins MAY use equivalent native APIs.
 Available with **base.zip alone**; does NOT need any `places-*.sqlite`.
 
 ```sql
--- 1a) township (level 8 縣轄, then level 7 直轄市區)
-SELECT t.name_zh
+-- 1a) township + its county in one hit (level 8 縣轄, then level 7 直轄市區)
+SELECT t.name_zh, t.county_zh
 FROM townships t JOIN townships_rtree r ON r.id = t.id
 WHERE t.admin_level = ?            -- try 8, then 7
   AND r.min_lat <= :lat AND :lat <= r.max_lat
   AND r.min_lon <= :lon AND :lon <= r.max_lon;
--- Then in app code: load geometry_wkb, parse, check polygon.covers(point)
+-- Then in app code: load geometry_wkb, parse, check polygon.covers(point).
+-- On a hit, county_zh already gives the 縣市 — query 1b is only a fallback.
 
--- 1b) county (level 4)
+-- 1b) county (level 4) — only if county_zh is NULL (legacy OSM schema)
 -- Same query with admin_level = 4
 ```
 
 App-side parsing of `geometry_wkb` requires a WGS84 WKB parser (e.g.
 `org.locationtech.jts.io.WKBReader` on Android).
+
+**Coastline caveat.** The MOI 鄉鎮市區界線 follows the *legal* coastline,
+which lags physical land reclamation. Addresses on reclaimed land (e.g.
+台中港 harbour roads 環港路 / 南堤路 in 龍井區) sit tens to hundreds of
+metres *seaward* of every polygon, so the polygon-in test returns no
+township. This is correct for a legal boundary, but a plugin that wants
+a best-effort answer can snap to the nearest township within a tolerance:
+`reverse_geocode.py --snap-m 1000` finds the nearest level-7/8 polygon
+within N metres and returns it with `approx=True`. County identification
+is unaffected — such points are still unambiguously inside one 縣市.
+
+On the generator side, `verify_samples.py` does not count these as
+failures: addresses matching `config/boundary_exceptions.yaml` (keyed by
+the MOI `boundary_release`) have their township checks downgraded to
+**INFO** and reported separately (`+Ni` in the table). When MOI ships a
+release that incorporates the reclamation, the old key stops matching and
+the points are checked strictly again — so a fixed boundary is detected
+rather than silently masked forever.
 
 ### 5.2 Tier 2 — Reverse geocode to nearest road name
 

@@ -1,0 +1,39 @@
+# Known township-boundary exceptions — INFO, not failures.
+#
+# These are VALID addresses that fall OUTSIDE every MOI 鄉鎮市區 polygon
+# because the legal 鄉鎮市區界線 lags physical land reclamation. They are
+# still shipped in the address data (unlike config/dirty_data.yaml, which
+# *excludes* bad rows); this file only tells verify_samples.py to downgrade
+# their township polygon-in / reverse / county checks from FAIL → INFO so a
+# known legal-boundary gap doesn't break the build.
+#
+# Keyed by the MOI `boundary_release` recorded in townships.sqlite metadata.
+# When MOI ships a newer release that incorporates the reclaimed land, the
+# old key stops matching → those samples become strict again → they either
+# pass (gap fixed) or fail (reminding us to re-file the exception under the
+# new release). This mirrors the per-release philosophy of dirty_data.yaml.
+#
+# Matching (see _sample_boundary_exception in verify_samples.py): every field
+# under `match` must match the sample; all listed fields must match.
+#   * `street_prefix` (list) — sample.street starts with one of them, so
+#     「南堤路」 also catches 「南堤路二段」.
+#   * any list value — membership test.
+#   * scalar — equal-string.
+# An exception only absorbs *failures*: a point that IS inside the polygon
+# still counts as a pass. `reason` / `expected_locale` are docs only.
+
+"1140318":
+  - reason: "台中港 harbour-reclaimed land. The dyke roads 環港路 / 南堤路(二段)
+      span 龍井區麗水里 and 梧棲區草湳里, sitting tens-to-hundreds of metres
+      seaward of the legal 鄉鎮市區 boundary, which follows the older
+      coastline. Sampled points are ~50–740 m outside every township polygon
+      (nearest is the expected township). Valid, shipped addresses; pending a
+      MOI boundary release that incorporates the reclamation."
+    discovered: "2026-05-30"
+    expected_locale: "台中市 (台中港 reclaimed land)"
+    match:
+      # 環港路/南堤路 are 台中港-specific dyke roads; within the 台中市 +
+      # 彰化縣 verify scope this prefix is unambiguous, so no district pin.
+      street_prefix:
+        - "環港路"
+        - "南堤路"

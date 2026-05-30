@@ -23,6 +23,7 @@ Pinned versions in `requirements.txt`, all ≥ 30 days old on PyPI as of
 | `pyproj`   | 3.7.2  | 2025-08-14 | TWD97 (EPSG:3826) ↔ WGS84 (EPSG:4326) |
 | `PyYAML`   | 6.0.3  | 2025-09-25 | Config files |
 | `tqdm`     | 4.67.3 | 2026-02-03 | Progress bar for 1.3M-row CSV ingest |
+| `pyshp`    | 2.3.1  | 2022-08-21 | Pure-Python reader for the MOI boundary shapefiles (.shp/.dbf) |
 
 ### Hash verification
 
@@ -33,7 +34,7 @@ enforce hash verification:
 ```bash
 # 1. install pip-tools and generate hashes (host or any disposable VM)
 pip install pip-tools
-echo -e "osmium==4.3.1\nshapely==2.1.2\npyproj==3.7.2\nPyYAML==6.0.3\ntqdm==4.67.3" \
+echo -e "osmium==4.3.1\nshapely==2.1.2\npyproj==3.7.2\nPyYAML==6.0.3\ntqdm==4.67.3\npyshp==2.3.1" \
   > requirements.in
 pip-compile --generate-hashes requirements.in
 
@@ -50,7 +51,7 @@ the diff carefully before committing.
 |---|---|---|
 | `places-<county>.sqlite` | `places` + `places_fts` (FTS5 unicode61) + `metadata` | Per-county TGOS data |
 | `places-osm.sqlite` | Same as above (`source='osm'`) | OSM landmarks + non-TGOS-county addr |
-| `townships.sqlite` | `townships` + `townships_rtree` + `metadata` | admin_level 4/7/8 polygons (WKB) |
+| `townships.sqlite` | `townships` + `townships_rtree` + `metadata` | admin_level 4/7/8 polygons (WKB) from the MOI 1140318 boundary shapefiles; rows carry `moi_code` + inline `county_zh` |
 | `roads.sqlite` | `roads` + `roads_rtree` + `metadata` | Named highways (WKB LineString) |
 
 All sqlite files use `PRAGMA journal_mode=WAL` during ingest; the WAL is

@@ -67,11 +67,16 @@ class CheckResult:
     """Aggregated counts per (county, direction, check)."""
     passed: int = 0
     failed: int = 0
+    info: int = 0
     failures: list[tuple[str, str]] = field(default_factory=list)
     """List of (description, detail) for each failed sample."""
 
-    def add(self, ok: bool, detail: str = "") -> None:
-        if ok:
+    def add(self, ok, detail: str = "") -> None:
+        # ok is True (pass), False (fail), or None (info — a known
+        # boundary exception that should not count against the build).
+        if ok is None:
+            self.info += 1
+        elif ok:
             self.passed += 1
         else:
             self.failed += 1
@@ -187,23 +192,30 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 # Township polygon helpers (iteration 2)
 # ---------------------------------------------------------------------------
 
-def _load_township_index(townships_db: Path) -> dict[tuple[int, str], list]:
-    """Build {(admin_level, name_zh): [(min_lat,max_lat,min_lon,max_lon, geom)]}.
+def _load_township_index(townships_db: Path) -> tuple[dict[tuple[int, str], list], bool]:
+    """Build ({(admin_level, name_zh): [(min_lat,max_lat,min_lon,max_lon, geom,
+    county_zh)]}, has_county_zh).
 
-    Pre-loading is fast — at most a few hundred polygons.
+    Pre-loading is fast — at most a few hundred polygons. ``county_zh`` is
+    populated only when the MOI-sourced schema provides it (NULL/absent on
+    the legacy OSM-derived layout); ``has_county_zh`` tells callers whether
+    the county_match check can run.
     """
     conn = sqlite3.connect(str(townships_db))
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(townships)").fetchall()}
+    has_county = "county_zh" in cols
+    county_sql = "t.county_zh" if has_county else "NULL AS county_zh"
     index: dict[tuple[int, str], list] = defaultdict(list)
     rows = conn.execute(
         "SELECT t.admin_level, t.name_zh, t.geometry_wkb,"
-        "       r.min_lat, r.max_lat, r.min_lon, r.max_lon"
+        "       r.min_lat, r.max_lat, r.min_lon, r.max_lon, " + county_sql +
         " FROM townships t JOIN townships_rtree r ON r.id = t.id"
     ).fetchall()
     conn.close()
-    for lvl, name, wkb, mn_lat, mx_lat, mn_lon, mx_lon in rows:
+    for lvl, name, wkb, mn_lat, mx_lat, mn_lon, mx_lon, county in rows:
         geom = shapely.wkb.loads(wkb)
-        index[(lvl, name)].append((mn_lat, mx_lat, mn_lon, mx_lon, geom))
-    return index
+        index[(lvl, name)].append((mn_lat, mx_lat, mn_lon, mx_lon, geom, county))
+    return index, has_county
 
 
 def _point_in_township(
@@ -213,7 +225,7 @@ def _point_in_township(
     if not polys:
         return False
     pt = Point(lon, lat)
-    for mn_lat, mx_lat, mn_lon, mx_lon, geom in polys:
+    for mn_lat, mx_lat, mn_lon, mx_lon, geom, _county in polys:
         if mn_lat <= lat <= mx_lat and mn_lon <= lon <= mx_lon:
             if geom.covers(pt):
                 return True
@@ -227,10 +239,79 @@ def _reverse_township_lookup(
     for (lvl, name), polys in townships_idx.items():
         if lvl != level:
             continue
-        for mn_lat, mx_lat, mn_lon, mx_lon, geom in polys:
+        for mn_lat, mx_lat, mn_lon, mx_lon, geom, _county in polys:
             if mn_lat <= lat <= mx_lat and mn_lon <= lon <= mx_lon:
                 if geom.covers(pt):
                     return name
+    return None
+
+
+def _reverse_county_lookup(
+    townships_idx: dict, lat: float, lon: float,
+) -> str | None:
+    """Return the ``county_zh`` of the level-7/8 township containing the point.
+
+    Uses the inline county MOI ships on every 鄉鎮市區 row — a single
+    polygon hit yields the county, no separate level-4 query needed.
+    """
+    pt = Point(lon, lat)
+    for (lvl, _name), polys in townships_idx.items():
+        if lvl not in (7, 8):
+            continue
+        for mn_lat, mx_lat, mn_lon, mx_lon, geom, county in polys:
+            if mn_lat <= lat <= mx_lat and mn_lon <= lon <= mx_lon:
+                if geom.covers(pt):
+                    return county
+    return None
+
+
+def load_boundary_exceptions(boundary_release: str | None) -> list[dict]:
+    """Township-boundary exceptions for this MOI release (INFO, not failures).
+
+    See config/boundary_exceptions.yaml. Returns [] when the file is absent
+    or has no entry for ``boundary_release`` (e.g. the legacy OSM layout,
+    whose metadata has no boundary_release).
+    """
+    if not boundary_release:
+        return []
+    path = CONFIG_DIR / "boundary_exceptions.yaml"
+    if not path.exists():
+        return []
+    data = yaml.safe_load(path.read_text("utf-8")) or {}
+    return data.get(boundary_release, []) or []
+
+
+def _sample_boundary_exception(s: Sample, rules: list[dict]) -> dict | None:
+    """Return the first matching exception rule, else None.
+
+    Match semantics for each key under a rule's `match`:
+      * ``street_prefix`` — list; sample.street must START WITH one of them
+        (so 「南堤路」 also matches 「南堤路二段」).
+      * any field whose value is a list — membership test.
+      * otherwise — equal-string.
+    A field name of ``street_prefix`` is checked against ``s.street``.
+    Omitted fields aren't compared; all listed fields must match.
+    """
+    for rule in rules:
+        m = rule.get("match", {})
+        ok = True
+        for key, want in m.items():
+            if key == "street_prefix":
+                prefixes = want if isinstance(want, (list, tuple)) else [want]
+                if not any(s.street.startswith(p) for p in prefixes):
+                    ok = False
+                    break
+                continue
+            got = getattr(s, key, None)
+            if isinstance(want, (list, tuple)):
+                if got not in want:
+                    ok = False
+                    break
+            elif got != want:
+                ok = False
+                break
+        if ok:
+            return rule
     return None
 
 
@@ -239,6 +320,8 @@ def check_sample(
     s: Sample,
     code_table: dict,
     townships_idx: dict | None = None,
+    has_county: bool = False,
+    boundary_rules: list[dict] | None = None,
 ) -> dict[str, tuple[bool, str]]:
     """Run the iteration-1 checks against one sample. Returns {check: (ok, detail)}."""
     results: dict[str, tuple[bool, str]] = {}
@@ -261,6 +344,8 @@ def check_sample(
         if townships_idx is not None:
             results["polygon_in"] = (False, "no match")
             results["reverse_township"] = (False, "no match")
+            if has_county:
+                results["county_match"] = (False, "no match")
         return results
 
     results["coverage"] = (True, "")
@@ -302,21 +387,48 @@ def check_sample(
 
     # 3 + 6: polygon-in + reverse-township (iteration 2 — needs townships.sqlite)
     if townships_idx is not None:
+        # Known boundary exception (e.g. 台中港 reclaimed land outside the
+        # legal polygon): downgrade the township checks to INFO (ok=None) so
+        # they neither pass-mask nor fail the build. See boundary_exceptions.yaml.
+        exc = _sample_boundary_exception(s, boundary_rules or [])
+        # An exception only absorbs *failures* (a point that is genuinely
+        # inside the polygon still counts as a pass): ok=None (INFO) iff the
+        # check would otherwise fail AND the sample matches an exception rule.
+        info_detail = (f"INFO boundary exception: {exc['reason'].split('.')[0]}"
+                       if exc else "")
+
         expected_township = mapping.get("district", "")
         ok3 = _point_in_township(townships_idx, 8, expected_township, s.lat, s.lon)
         # 直轄市的區 are admin_level=7; 縣轄鄉鎮市 are admin_level=8. Try both.
         if not ok3:
             ok3 = _point_in_township(townships_idx, 7, expected_township, s.lat, s.lon)
-        results["polygon_in"] = (ok3, f"({s.lat:.5f},{s.lon:.5f}) not in {expected_township}"
-                                 if not ok3 else "")
+        results["polygon_in"] = (
+            (None if (exc and not ok3) else ok3),
+            info_detail if (exc and not ok3) else
+            (f"({s.lat:.5f},{s.lon:.5f}) not in {expected_township}" if not ok3 else ""),
+        )
 
         # Reverse: which township polygon contains this point?
         rev = (_reverse_township_lookup(townships_idx, s.lat, s.lon, 8)
                or _reverse_township_lookup(townships_idx, s.lat, s.lon, 7))
         ok6 = rev == expected_township
         results["reverse_township"] = (
-            ok6, f"got {rev!r} want {expected_township!r}" if not ok6 else ""
+            (None if (exc and not ok6) else ok6),
+            info_detail if (exc and not ok6) else
+            (f"got {rev!r} want {expected_township!r}" if not ok6 else ""),
         )
+
+        # 7: county_match — the MOI inline county_zh of the containing
+        # township equals the expected 縣市 (only when the schema carries it).
+        if has_county:
+            expected_county = mapping.get("county", "")
+            got_county = _reverse_county_lookup(townships_idx, s.lat, s.lon)
+            ok7 = got_county == expected_county
+            results["county_match"] = (
+                (None if (exc and not ok7) else ok7),
+                info_detail if (exc and not ok7) else
+                (f"got {got_county!r} want {expected_county!r}" if not ok7 else ""),
+            )
 
     return results
 
@@ -344,11 +456,22 @@ def verify_county(county_id: str, n: int = 50, *, townships_db: Path | None = No
         return -1
 
     townships_idx = None
+    has_county = False
+    boundary_rules: list[dict] = []
     active_checks = CHECKS_ITER1
     if townships_db and townships_db.exists():
         print(f"  townships  : {townships_db}")
-        townships_idx = _load_township_index(townships_db)
-        active_checks = CHECKS_ITER2
+        townships_idx, has_county = _load_township_index(townships_db)
+        active_checks = CHECKS_ITER2 + (("county_match",) if has_county else ())
+        tconn = sqlite3.connect(str(townships_db))
+        row = tconn.execute(
+            "SELECT value FROM metadata WHERE key='boundary_release'"
+        ).fetchone()
+        tconn.close()
+        boundary_rules = load_boundary_exceptions(row[0] if row else None)
+        if boundary_rules:
+            print(f"  boundary exceptions: {len(boundary_rules)} rule(s) for "
+                  f"release {row[0]} → matching township checks reported as INFO")
 
     sampled = load_county_samples(county_id, n=n)
     counts: dict[str, dict[str, CheckResult]] = defaultdict(lambda: defaultdict(CheckResult))
@@ -357,23 +480,30 @@ def verify_county(county_id: str, n: int = 50, *, townships_db: Path | None = No
     try:
         for direction in DIRECTIONS:
             for s in sampled[direction]:
-                res = check_sample(conn, s, code_table, townships_idx)
+                res = check_sample(conn, s, code_table, townships_idx, has_county,
+                                   boundary_rules)
                 for ck, (ok, detail) in res.items():
                     counts[ck][direction].add(ok, detail=detail)
     finally:
         conn.close()
 
-    # Pretty-print table
+    # Pretty-print table. Cells show passed/(passed+failed); a trailing
+    # "+Ni" flags INFO downgrades (known boundary exceptions, not failures).
     headers = [f"{county_id[:3].title()}-{d[0].upper()}" for d in DIRECTIONS]
-    print(f"\n  {'check':<18s}" + "".join(f"{h:>10s}" for h in headers))
+    print(f"\n  {'check':<18s}" + "".join(f"{h:>12s}" for h in headers))
     total_failed = 0
+    total_info = 0
     for ck in active_checks:
         cells = []
         for d in DIRECTIONS:
             r = counts[ck][d]
-            cells.append(f"{r.passed}/{r.passed + r.failed}")
+            cell = f"{r.passed}/{r.passed + r.failed}"
+            if r.info:
+                cell += f"+{r.info}i"
+            cells.append(cell)
             total_failed += r.failed
-        print(f"  {ck:<18s}" + "".join(f"{c:>10s}" for c in cells))
+            total_info += r.info
+        print(f"  {ck:<18s}" + "".join(f"{c:>12s}" for c in cells))
 
     # Dump failure details
     verif_dir = OUTPUT_DIR / "verification"
@@ -385,22 +515,25 @@ def verify_county(county_id: str, n: int = 50, *, townships_db: Path | None = No
                     "street", "area", "lane", "alley", "number", "lat", "lon", "detail"])
         for ck in active_checks:
             for d in DIRECTIONS:
-                r = counts[ck][d]
                 samples_in_dir = sampled[d]
                 conn = sqlite3.connect(str(db_path))
                 for s in samples_in_dir:
-                    sr = check_sample(conn, s, code_table, townships_idx)
+                    sr = check_sample(conn, s, code_table, townships_idx, has_county,
+                                      boundary_rules)
                     ok, detail = sr[ck]
-                    if not ok:
+                    if ok is False:   # genuine failure only — not INFO (None)
                         w.writerow([ck, d, s.district_code, s.village, s.neighbor,
                                     s.street, s.area, s.lane, s.alley, s.number,
                                     s.lat, s.lon, detail])
                 conn.close()
 
+    if total_info:
+        print(f"  ℹ  {total_info} township check(s) downgraded to INFO "
+              f"(known boundary exceptions; see config/boundary_exceptions.yaml)")
     if total_failed > 0:
         print(f"  → failure detail: {failure_csv}")
     else:
-        print(f"  ✅ all {len(DIRECTIONS)*n*len(active_checks):,} checks passed")
+        print(f"  ✅ all non-INFO checks passed")
     return total_failed
 
 

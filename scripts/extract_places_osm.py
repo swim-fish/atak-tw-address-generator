@@ -67,8 +67,11 @@ CREATE TABLE places (
 
 CREATE INDEX idx_places_county ON places(county);
 
+-- `area` indexed (schema v3) to keep all places-*.sqlite on one query
+-- contract; see docs/address-search-guide.md. unicode61 makes a contiguous
+-- CJK run one token, so each short column value is matchable as a whole token.
 CREATE VIRTUAL TABLE places_fts USING fts5(
-    name, display_name, display_name_halfwidth, street, township,
+    name, display_name, display_name_halfwidth, street, area, township,
     content='places',
     content_rowid='id',
     tokenize='unicode61'
@@ -85,8 +88,8 @@ CREATE TABLE metadata (
 );
 """
 
-# See docs/data-contract.md §1.
-SCHEMA_VERSION = "2"
+# See docs/data-contract.md §1. v3: `area` added to places_fts (additive).
+SCHEMA_VERSION = "3"
 
 
 def name_zh(tags: dict) -> str | None:

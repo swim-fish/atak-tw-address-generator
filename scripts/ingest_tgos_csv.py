@@ -123,8 +123,15 @@ CREATE INDEX idx_places_lookup ON places(
     district_code, village, neighbor, street, area, lane, alley, number
 );
 
+-- unicode61 tokenizes a contiguous CJK run as ONE token (NOT per-character),
+-- so a column's value is matchable as a whole token / prefix but not as a
+-- mid-string substring. `street`, `area`, and `township` are indexed as their
+-- own columns precisely so their short values (大誠街 / 十甲巷 / 中區) become
+-- standalone tokens. `area` (schema v3) lets empty-street addresses — located
+-- by a named 巷/莊/新村 in 地區 — be found by that locality name.
+-- See docs/address-search-guide.md and docs/empty-street-fts-report.md.
 CREATE VIRTUAL TABLE places_fts USING fts5(
-    name, display_name, display_name_halfwidth, street, township,
+    name, display_name, display_name_halfwidth, street, area, township,
     content='places',
     content_rowid='id',
     tokenize='unicode61'
@@ -143,7 +150,9 @@ CREATE TABLE metadata (
 """
 
 # See docs/data-contract.md §1. Bump on incompatible schema changes.
-SCHEMA_VERSION = "2"
+# v3: added `area` to places_fts so empty-street addresses are searchable by
+#     their 地區 locality name (e.g. 十甲巷, 介壽新村). Additive, non-breaking.
+SCHEMA_VERSION = "3"
 
 
 # ---------------------------------------------------------------------------

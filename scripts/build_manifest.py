@@ -95,7 +95,7 @@ def write_manifest(
         lines.append(f"    size:    {size_mib:.1f} MiB")
         lines.append(f"    sha256:  {file_sha}")
         meta = read_meta(p)
-        for k in ("source", "county", "data_date", "csv_sha256",
+        for k in ("schema_version", "source", "county", "data_date", "csv_sha256",
                   "inserted", "skipped_dirty", "inserted_level4",
                   "inserted_level7", "inserted_level8",
                   "landmarks", "addrs_kept", "addrs_excluded"):

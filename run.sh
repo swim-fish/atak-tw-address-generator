@@ -12,9 +12,12 @@
 #   ./run.sh verify                     # rerun verification on existing output
 #
 # Optional env:
-#   VNS_MEMORY_GB=N  cap Docker memory (defaults to autodetect, max 8g)
-#   PIP_HASHES=1     enforce hash verification on pip install (after first
-#                    `pip-compile --generate-hashes` run)
+#   VNS_MEMORY_GB=N           cap Docker memory (defaults to autodetect, max 8g)
+#   PIP_HASHES=1              enforce hash verification on pip install (after
+#                             first `pip-compile --generate-hashes` run)
+#   INCLUDE_DETACHED_PARTS=1  add MOI detached-part polygons to townships
+#                             (e.g. 瑪家鄉三和村 enclave); off by default
+#                             because they overlap the main 鄉鎮市區 layer
 # ==============================================================================
 
 set -euo pipefail
@@ -74,6 +77,7 @@ exec docker run --rm \
     --cap-drop=ALL \
     --security-opt=no-new-privileges \
     --memory="${MEM_GB}g" \
+    -e INCLUDE_DETACHED_PARTS="${INCLUDE_DETACHED_PARTS:-0}" \
     -v "$(pwd)/input:/app/input:ro" \
     -v "$(pwd)/cache:/app/cache" \
     -v "$(pwd)/output:/app/output" \

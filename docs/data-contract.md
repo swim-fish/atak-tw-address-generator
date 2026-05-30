@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Contract version** | `2` (this document) |
+| **Contract version** | `3` (this document) |
 | **Producer** | `atak_vns_offline_routing/atak-tw-address-generator` |
 | **Consumers** | ATAK plugins reading offline TW address data — primarily `atak_tw_power_plugin` |
 | **Status** | Stable; bump `schema_version` on incompatible changes |
@@ -66,8 +66,8 @@ directories) into:
 | `townships.sqlite` | `base.zip` | **yes** | Admin polygons for reverse geocoding |
 | `roads.sqlite` | `base.zip` | **yes** | Named roads for reverse geocoding |
 | `places-osm.sqlite` | `base.zip` | **yes** | OSM landmarks + non-TGOS addr |
-| `places-taichung.sqlite` | `places-taichung.zip` | optional | Taichung TGOS addr (1.3M rows) |
-| `places-changhua.sqlite` | `places-changhua.zip` | optional | Changhua TGOS addr (467K rows) |
+| `places-taichung.sqlite` | `places-taichung.zip` | optional | Taichung TGOS addr (~731K rows post-reduction) |
+| `places-changhua.sqlite` | `places-changhua.zip` | optional | Changhua TGOS addr (~427K rows post-reduction) |
 | `timestamp.<region>` | each ZIP | yes (per ZIP) | Data-date sidecar (string, no newline-stripping required) |
 | `*.manifest.txt` | each ZIP | informational | Provenance (NOT used at runtime) |
 
@@ -89,7 +89,7 @@ for (File f : dir.listFiles((d, name) -> name.matches("places-.*\\.sqlite"))) {
 
 ## 3. SQLite schemas
 
-### 3.1 `places-*.sqlite` (v2)
+### 3.1 `places-*.sqlite` (v3)
 
 Same schema for `places-taichung.sqlite`, `places-changhua.sqlite`,
 `places-osm.sqlite`. The `source` column distinguishes provenance.
@@ -349,7 +349,7 @@ WHERE r.min_lat <= :lat + 0.005 AND :lat - 0.005 <= r.max_lat
 -- 0.005° ≈ 500 m bbox; typical urban hit count < 500.
 ```
 
-Expected runtime on Taichung (1.3M rows): **< 200 ms** including parsing.
+Expected runtime on Taichung (~731K rows post-reduction): **< 200 ms** including parsing.
 
 ### 5.4 Tier 3 — schema_version=1 fallback
 

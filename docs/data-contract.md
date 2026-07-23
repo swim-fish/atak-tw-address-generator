@@ -148,20 +148,24 @@ Required `metadata` keys:
 | Key | Example | Notes |
 |---|---|---|
 | `schema_version` | `'3'` | Plugins MUST read this |
+| `data_version` | `'2026.07.23.1'` | Release data identity (`YYYY.MM.DD.REVISION`); present in every SQLite |
+| `address_policy_version` | `'2'` | TGOS only; normalization/reduction semantics, independent of schema layout |
 | `source` | `'tgos'` or `'osm'` | Provenance of the whole file |
 | `county` | `'台中市'` | TGOS only |
 | `data_date` | `'115-01'` | TGOS only; 民國年-月 |
 | `csv_sha256` | hex | TGOS only |
-| `inserted` | `'731005'` | row count *(refreshed after each reduction stage; equals the actual row count in `places`)* |
+| `inserted` | `'766952'` | row count *(refreshed after each reduction stage; equals the actual row count in `places`)* |
 | `skipped_dirty` | `'1'` | TGOS only; rows excluded per `dirty_data.yaml` (see [`dirty-data-report.md`](./dirty-data-report.md)) |
-| `deduped_at` | `'2026-05-27T14:37:00Z'` | TGOS only; UTC timestamp of stage 1 (floor dedup) |
-| `deduped_removed` | `'550561'` | TGOS only; floor rows removed in stage 1 (see [`dedup-floors-report.md`](./dedup-floors-report.md)) |
-| `deduped_strategy` | `'drop-floor-rows-when-ground-floor-exists;keep-lowest-id-otherwise'` | TGOS only; stage-1 rule tag |
+| `deduped_at` | `'2026-07-23T10:53:24Z'` | TGOS only; UTC timestamp of stage 1 (floor dedup) |
+| `deduped_removed` | `'549472'` | TGOS only; redundant floor rows removed in stage 1 (see [`dedup-floors-report.md`](./dedup-floors-report.md)) |
+| `deduped_synthesized` | `'10956'` | TGOS only; all-floor groups whose lowest-id row was rewritten as the base address |
+| `deduped_non_suffix_floor_markers` | `'256'` | TGOS only; retained rows where `樓`/`層` is not a suffix after `號` |
+| `deduped_strategy` | `'coordinate-and-base-address;prefer-explicit-base;synthesize-lowest-floor-id'` | TGOS only; stage-1 rule tag |
 | `deduped_inserted_orig` | `'1316671'` | TGOS only; pre-stage-1 row count |
-| `collapsed_at` | `'2026-05-27T14:50:14Z'` | TGOS only; UTC timestamp of stage 2 (same-coord collapse) |
-| `collapsed_removed` | `'35105'` | TGOS only; same-coord duplicates removed in stage 2 |
-| `collapsed_strategy` | `'one-row-per-coord;shortest-number;lowest-id'` | TGOS only; stage-2 rule tag |
-| `collapsed_inserted_pre` | `'766110'` | TGOS only; post-stage-1, pre-stage-2 row count |
+| `collapsed_at` | `'2026-07-23T10:54:53Z'` | TGOS only; UTC timestamp of stage 2 (base-address dedup) |
+| `collapsed_removed` | `'247'` | TGOS only; duplicate coordinate-plus-base-address rows removed in stage 2 |
+| `collapsed_strategy` | `'one-row-per-coordinate-and-base-address;lowest-id'` | TGOS only; stage-2 rule tag |
+| `collapsed_inserted_pre` | `'767199'` | TGOS only; post-stage-1, pre-stage-2 row count |
 | `region` | `'tw-central'` | OSM only |
 | `bbox` | `'120.20,23.55,121.45,24.75'` | OSM only |
 
@@ -474,6 +478,21 @@ Contents:
 - `metadata.inserted` is refreshed after each stage so it always equals
   `COUNT(*) FROM places`. Plugins that already trust `inserted` need
   no change.
+
+> **2026-07-23 — address-reduction policy corrected (no
+> `schema_version` bump).** The table layout is unchanged. Stage 1 now
+> groups by exact coordinate plus the complete base address; an existing
+> base row wins, otherwise the lowest-id floor row is rewritten without
+> its floor suffix. Stage 2 removes only exact duplicate
+> coordinate-plus-base-address rows. Different house numbers at the same
+> TGOS coordinate are retained. A floor suffix is recognized only when
+> `樓` or `層` occurs after the first `號`, so building names such as
+> `合作大樓１之１號` remain unchanged.
+>
+> The release adds optional `metadata.data_version` and
+> `metadata.address_policy_version`. They separate data-kit identity and
+> reduction semantics from structural `schema_version`; existing v3
+> consumers may ignore both keys.
 
 ### `2` — 2026-05-24
 

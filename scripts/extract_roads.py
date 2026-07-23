@@ -20,6 +20,8 @@ import osmium.geom
 import shapely.wkb
 import yaml
 
+import data_version as dv
+
 CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
@@ -142,6 +144,7 @@ def main() -> int:
     bbox = region_cfg["bbox"]
     meta = {
         "schema_version": "1",
+        **dv.load().common_metadata(),
         "source": "osm-clipped",
         "region": args.region,
         "bbox": f"{bbox['west']},{bbox['south']},{bbox['east']},{bbox['north']}",

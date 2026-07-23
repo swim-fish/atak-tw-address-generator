@@ -38,6 +38,8 @@ import shapely.geometry
 import shapely.wkb
 import yaml
 
+import data_version as dv
+
 INPUT_DIR = Path(__file__).resolve().parent.parent / "input"
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
@@ -239,6 +241,7 @@ def main() -> int:
     region_label = args.region
     meta = {
         "schema_version": "1",
+        **dv.load().common_metadata(),
         "source": "moi-shapefile",
         "boundary_release": "1140318",
         "detached_parts": "included" if args.include_detached_parts else "excluded",

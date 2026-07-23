@@ -29,6 +29,7 @@ import shapely.wkb
 from shapely.geometry import Point
 import yaml
 
+import data_version as dv
 import normalize_address as na
 
 CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
@@ -248,6 +249,7 @@ def main() -> int:
 
     meta = {
         "schema_version": SCHEMA_VERSION,
+        **dv.load().common_metadata(),
         "source": "osm-clipped",
         "region": args.region,
         "bbox": f"{bbox['west']},{bbox['south']},{bbox['east']},{bbox['north']}",

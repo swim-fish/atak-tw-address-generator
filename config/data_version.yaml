@@ -1,0 +1,8 @@
+# Release-facing data identity.
+#
+# data_version uses CalVer: YYYY.MM.DD.REVISION. Bump it for every published
+# data-kit release, including rebuilds from unchanged source CSVs.
+# address_policy_version changes only when address normalization/reduction
+# semantics change.
+data_version: "2026.07.23.1"
+address_policy_version: "2"

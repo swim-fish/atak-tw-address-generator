@@ -91,16 +91,17 @@ systems for every row — the data itself is the projection's reference).
 
 Once per-county ingest is done, two reduction passes run by default:
 
-1. `scripts/dedup_floors.py` — drops `N樓之M` / `地下N層之K` rows that
-   share a coordinate with a ground-floor row. Keeps every distinct
-   ground-floor row.
-2. `scripts/collapse_coords.py` — collapses each remaining same-coord
-   group to one row, preferring the shortest `number` (biases toward
-   building main door).
+1. `scripts/dedup_floors.py` — derives a base number by removing a
+   `樓`/`層` suffix only when it occurs after the first `號`, then groups by
+   exact coordinate and complete base address. An explicit base row wins;
+   when a group contains only floor rows, the lowest-id row is rewritten
+   to the base number.
+2. `scripts/collapse_coords.py` — removes only remaining duplicate rows
+   with the same exact coordinate and complete base-address key.
 
-The end result is a strict invariant: **at most one row per
-coordinate**. Taichung loses ~44 % of its rows, Changhua ~8 %. Strategy
-details, metadata layout, and current counts are in
+The end result permits multiple different addresses at one TGOS coordinate,
+but guarantees at most one row per **coordinate plus complete base
+address**. Strategy details, metadata layout, and current counts are in
 [`dedup-floors-report.md`](./dedup-floors-report.md).
 
 The verifier (`verify_samples.py`) skips CSV rows whose `number`
@@ -125,5 +126,8 @@ check list and tolerance budget.
 
 Each ZIP gets a sidecar `*.manifest.txt` carrying ZIP SHA-256, per-file
 SHA-256, source CSV SHA-256, TGOS data date, OSM extraction counts, ISO
-build timestamp, and region bbox. This mirrors the upstream VNS
-generator's manifest discipline.
+build timestamp, region bbox, release `data_version`, and
+`address_policy_version`. `config/data_version.yaml` is the single source
+of truth. Packaging refuses SQLite artifacts whose embedded version is
+stale, and `scripts/check_data_version.py` verifies metadata, ZIP version
+sidecars, and manifest hashes before release.

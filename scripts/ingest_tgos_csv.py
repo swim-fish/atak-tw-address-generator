@@ -19,6 +19,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ import yaml
 from tqdm import tqdm
 
 import coord_transform as ct
+import data_version as dv
 import normalize_address as na
 
 # ---------------------------------------------------------------------------
@@ -299,6 +301,7 @@ def ingest(county_id: str, batch_size: int = 10000) -> int:
     """Ingest one county. Returns the number of inserted rows."""
     config = load_csv_sources()
     code_table = load_district_codes()
+    version = dv.load()
 
     if county_id not in config:
         print(f"ERROR: county '{county_id}' not in csv_sources.yaml", file=sys.stderr)
@@ -319,7 +322,7 @@ def ingest(county_id: str, batch_size: int = 10000) -> int:
     # sporadically fail with "disk I/O error" during long sqlite write
     # workloads. /tmp is single-writer, overlay-backed, and very fast.
     # Copy to the mount at the end.
-    tmp_path = Path("/tmp") / src["output_sqlite"]
+    tmp_path = Path(tempfile.gettempdir()) / src["output_sqlite"]
     if tmp_path.exists():
         tmp_path.unlink()
 
@@ -412,6 +415,7 @@ def ingest(county_id: str, batch_size: int = 10000) -> int:
         # Metadata
         meta = {
             "schema_version": SCHEMA_VERSION,
+            **version.tgos_metadata(),
             "source": "tgos",
             "county": src["county_name"],
             "data_date": src["data_date"],

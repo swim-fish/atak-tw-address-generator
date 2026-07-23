@@ -30,7 +30,7 @@ the empty-street rate:
 |---|---|---|
 | Raw CSV rows | 1,316,674 | 467,023 |
 | CSV rows with empty `街、路段` | 17,736 (**1.35 %**) | 44,028 (**9.43 %**) |
-| Shipped `places` rows (post dedup/collapse) | 731,005 | 426,690 |
+| May 2026 shipped baseline (pre-address-policy-v2) | 731,005 | 426,690 |
 | Shipped rows with `street IS NULL` | 14,021 (**1.92 %**) | 43,090 (**10.10 %**) |
 
 Changhua's empty-street share is ~7× Taichung's. The numbers match the
@@ -163,7 +163,8 @@ Enables any **≥3-character substring** anywhere in the address (verified:
 Caveats: trigram needs **≥3 chars** (2-char queries like `中區`/`中山` return
 0, so unicode61 must stay for short queries and ranking). Runtime memory is
 **not** proportional to index size — FTS5 streams doclists; the real cost is a
-**hot-trigram scan**: the most common trigram `彰化縣` spans **all 426,690**
+**historical hot-trigram scan**: the most common trigram `彰化縣` spanned
+**all 426,690**
 Changhua rows, so a bare 3-char query on a very common trigram is CPU-bound
 (MB-scale buffers, not the whole index). Mitigate with ≥3-char minimum,
 AND-combined longer queries, and a `district_code` pre-filter.

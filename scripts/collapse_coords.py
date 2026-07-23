@@ -1,21 +1,9 @@
-"""Collapse same-coordinate house-number groups to a single row.
+"""Remove duplicate base addresses without collapsing distinct addresses.
 
-Runs *after* ``dedup_floors.py``. The floor-level dedup removes 樓/層
-rows that share a coord with a ground-floor row, but TGOS still pins
-multiple **distinct** house numbers to the same building-centre point
-(e.g. 中清路一段 822 之 100…159 號 — 160 ground-floor addresses all at
-one coord). The 2D map cannot place separate markers there, so we
-collapse each remaining same-coord group to one row.
-
-Strategy (per ``(lat, lon)`` group):
-  1. Prefer the row with the shortest ``number`` string — biases toward
-     a building's main door (e.g. ``８２２號`` beats ``８２２之１００號``).
-  2. Tiebreak by lowest ``id`` for determinism.
-
-This is lossy by design: forward FTS5 searches like
-``中清路一段 822 之 105 號`` will no longer match any row in the group.
-Operators who need that recall must skip this stage (``--no-collapse``
-in build-data.sh).
+Runs after ``dedup_floors.py``. Rows are grouped by exact coordinate and
+the complete human-facing base-address components. The lowest-id row wins
+only when that full key is duplicated. Different house numbers assigned the
+same TGOS building-centre coordinate are preserved.
 
 Outputs:
   - Removal list CSV at ``output/logs/collapse-<stem>-removed-<UTC>.csv``
@@ -44,21 +32,33 @@ OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 LOG_DIR = OUTPUT_DIR / "logs"
 
 
-# A row is kept iff it is the lexicographically first by
-# (LENGTH(number), id) within its (lat, lon) group; all others are dropped.
+# ``neighbor`` is excluded because normalize_address.py does not render it.
+# Street falls back to area exactly as the display-name composer does.
 _RANK_CTE = """
 WITH ranked AS (
     SELECT
-        id, lat, lon, number, display_name,
+        id, lat, lon, district_code, village, street, area, lane, alley,
+        number, display_name,
         ROW_NUMBER() OVER (
-            PARTITION BY lat, lon
-            ORDER BY LENGTH(number), id
+            PARTITION BY lat, lon, district_code,
+                         COALESCE(village, ''),
+                         COALESCE(street, area, ''),
+                         COALESCE(lane, ''), COALESCE(alley, ''),
+                         number
+            ORDER BY id
         ) AS rn,
-        COUNT(*)    OVER (PARTITION BY lat, lon) AS group_size
+        COUNT(*) OVER (
+            PARTITION BY lat, lon, district_code,
+                         COALESCE(village, ''),
+                         COALESCE(street, area, ''),
+                         COALESCE(lane, ''), COALESCE(alley, ''),
+                         number
+        ) AS group_size
     FROM places
 ),
 kept_rep AS (
-    SELECT lat, lon, id AS kept_id, display_name AS kept_display_name
+    SELECT lat, lon, district_code, village, street, area, lane, alley, number,
+           id AS kept_id, display_name AS kept_display_name
     FROM ranked WHERE rn = 1
 )
 """
@@ -71,9 +71,16 @@ def _export_removal_csv(conn: sqlite3.Connection, csv_path: Path) -> int:
         "SELECT r.id, r.lat, r.lon, r.number, r.display_name, "
         "       k.kept_id, k.kept_display_name "
         "FROM ranked r "
-        "LEFT JOIN kept_rep k ON k.lat = r.lat AND k.lon = r.lon "
+        "LEFT JOIN kept_rep k "
+        "  ON k.lat = r.lat AND k.lon = r.lon "
+        " AND k.district_code = r.district_code "
+        " AND COALESCE(k.village, '') = COALESCE(r.village, '') "
+        " AND COALESCE(k.street, k.area, '') = COALESCE(r.street, r.area, '') "
+        " AND COALESCE(k.lane, '') = COALESCE(r.lane, '') "
+        " AND COALESCE(k.alley, '') = COALESCE(r.alley, '') "
+        " AND k.number = r.number "
         "WHERE r.rn > 1 "
-        "ORDER BY r.lat, r.lon, r.id"
+        "ORDER BY r.lat, r.lon, r.number, r.id"
     )
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     n = 0
@@ -147,7 +154,9 @@ def _apply(db_path: Path, removed_count: int) -> Path:
         meta_updates = {
             "collapsed_at": now,
             "collapsed_removed": str(removed_count),
-            "collapsed_strategy": "one-row-per-coord;shortest-number;lowest-id",
+            "collapsed_strategy": (
+                "one-row-per-coordinate-and-base-address;lowest-id"
+            ),
         }
         # Preserve the pre-collapse count for traceability.
         row = conn.execute(
@@ -187,9 +196,9 @@ def process(db_path: Path, apply: bool) -> None:
     try:
         stats = _summary(conn)
         print(f"  total rows                   : {stats['total']:>10,}", flush=True)
-        print(f"  rows to remove (coord-collapse): {stats['to_remove']:>10,}  "
+        print(f"  rows to remove (base duplicates): {stats['to_remove']:>10,}  "
               f"({stats['to_remove'] / stats['total'] * 100:.1f}%)", flush=True)
-        print(f"  remaining after collapse     : {stats['remaining']:>10,}", flush=True)
+        print(f"  remaining after base dedup   : {stats['remaining']:>10,}", flush=True)
 
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         csv_path = LOG_DIR / f"collapse-{db_path.stem}-removed-{ts}.csv"

@@ -24,6 +24,8 @@ from pathlib import Path
 
 import yaml
 
+import data_version as dv
+
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 STAGING = OUTPUT_DIR / "staging"
@@ -71,11 +73,14 @@ def write_manifest(
     region_id: str,
     bbox_str: str,
     contents: list[tuple[str, Path]],
+    version: dv.DataVersion,
 ) -> None:
     zip_sha = sha256_of_file(zip_path)
     zip_size_mib = zip_path.stat().st_size / (1 << 20)
     lines = [
         f"Kit:              {kit_name}",
+        f"Data version:      {version.data_version}",
+        f"Address policy:    {version.address_policy_version}",
         f"Region:           {region_id}",
         f"Bbox:             {bbox_str}",
         f"Generated at:     {now_iso()}",
@@ -95,16 +100,25 @@ def write_manifest(
         lines.append(f"    size:    {size_mib:.1f} MiB")
         lines.append(f"    sha256:  {file_sha}")
         meta = read_meta(p)
-        for k in ("schema_version", "source", "county", "data_date", "csv_sha256",
+        for k in ("schema_version", "data_version", "address_policy_version",
+                  "source", "county", "data_date", "csv_sha256",
                   "inserted", "skipped_dirty", "inserted_level4",
                   "inserted_level7", "inserted_level8",
-                  "landmarks", "addrs_kept", "addrs_excluded"):
+                  "landmarks", "addrs_kept", "addrs_excluded",
+                  "deduped_removed", "deduped_synthesized",
+                  "deduped_non_suffix_floor_markers", "deduped_strategy",
+                  "collapsed_removed", "collapsed_strategy"):
             if k in meta:
                 lines.append(f"    meta.{k}: {meta[k]}")
     manifest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def stage_kit(kit_name: str, files: list[Path], data_date_files: dict[str, str]) -> Path:
+def stage_kit(
+    kit_name: str,
+    files: list[Path],
+    data_date_files: dict[str, str],
+    version: dv.DataVersion,
+) -> Path:
     """Copy files into staging/<kit_name>/ and write a timestamp file."""
     staging = STAGING / kit_name
     if staging.exists():
@@ -113,10 +127,38 @@ def stage_kit(kit_name: str, files: list[Path], data_date_files: dict[str, str])
     for f in files:
         if f.exists():
             shutil.copy2(f, staging / f.name)
-    if data_date_files:
-        for label, value in data_date_files.items():
-            (staging / f"timestamp.{label}").write_text(value + "\n", encoding="utf-8")
+    timestamp_values = {
+        **data_date_files,
+        "data-version": version.data_version,
+        "address-policy-version": version.address_policy_version,
+    }
+    for label, value in timestamp_values.items():
+        (staging / f"timestamp.{label}").write_text(
+            value + "\n", encoding="utf-8"
+        )
     return staging
+
+
+def require_current_versions(
+    files: list[Path], version: dv.DataVersion
+) -> None:
+    errors = []
+    for path in files:
+        if not path.is_file():
+            continue
+        metadata = read_meta(path)
+        errors.extend(
+            f"{path.name}: {item}"
+            for item in dv.mismatches(metadata, version)
+        )
+    if errors:
+        details = "\n".join(f"  - {error}" for error in errors)
+        raise RuntimeError(
+            "refusing to package stale data-version metadata:\n"
+            f"{details}\n"
+            "Rebuild the databases, or intentionally run "
+            "scripts/stamp_data_version.py --apply."
+        )
 
 
 def main() -> int:
@@ -126,12 +168,20 @@ def main() -> int:
 
     region_cfg = yaml.safe_load((CONFIG_DIR / "regions.yaml").read_text("utf-8"))[args.region]
     csv_sources = yaml.safe_load((CONFIG_DIR / "csv_sources.yaml").read_text("utf-8"))
+    version = dv.load()
     bbox = region_cfg["bbox"]
     bbox_str = f"{bbox['west']},{bbox['south']},{bbox['east']},{bbox['north']}"
 
     townships = OUTPUT_DIR / "townships.sqlite"
     roads = OUTPUT_DIR / "roads.sqlite"
     places_osm = OUTPUT_DIR / "places-osm.sqlite"
+    county_files = [
+        OUTPUT_DIR / source["output_sqlite"]
+        for source in csv_sources.values()
+    ]
+    require_current_versions(
+        [townships, roads, places_osm, *county_files], version
+    )
 
     # ---- base.zip ----
     print("[manifest] packaging base.zip ...")
@@ -139,6 +189,7 @@ def main() -> int:
         "base",
         [townships, roads, places_osm],
         {"base": read_meta(places_osm).get("region", args.region)},
+        version,
     )
     base_zip = OUTPUT_DIR / "base.zip"
     write_zip(base_staging, base_zip)
@@ -153,6 +204,7 @@ def main() -> int:
             ("roads (named highways)", roads),
             ("places-osm (landmarks + non-TGOS addr)", places_osm),
         ],
+        version=version,
     )
     print(f"[manifest]   base.zip: {base_zip.stat().st_size / (1 << 20):.1f} MiB")
 
@@ -168,6 +220,7 @@ def main() -> int:
             f"places-{county_id}",
             [county_sqlite],
             {county_id: src.get("data_date", "")},
+            version,
         )
         z = OUTPUT_DIR / f"places-{county_id}.zip"
         write_zip(staging, z)
@@ -178,6 +231,7 @@ def main() -> int:
             region_id=args.region,
             bbox_str=bbox_str,
             contents=[(f"places-{county_id} ({src['county_name']} TGOS)", county_sqlite)],
+            version=version,
         )
         county_zips.append((county_id, z))
         print(f"[manifest]   places-{county_id}.zip: {z.stat().st_size / (1 << 20):.1f} MiB")
@@ -189,7 +243,9 @@ def main() -> int:
     for county_id, src in csv_sources.items():
         full_files.append(OUTPUT_DIR / src["output_sqlite"])
         full_timestamps[county_id] = src.get("data_date", "")
-    full_staging = stage_kit("tw-central-full", full_files, full_timestamps)
+    full_staging = stage_kit(
+        "tw-central-full", full_files, full_timestamps, version
+    )
     full_zip = OUTPUT_DIR / f"{args.region}-full.zip"
     write_zip(full_staging, full_zip)
     full_contents = [
@@ -206,6 +262,7 @@ def main() -> int:
         region_id=args.region,
         bbox_str=bbox_str,
         contents=full_contents,
+        version=version,
     )
     print(f"[manifest]   {args.region}-full.zip: {full_zip.stat().st_size / (1 << 20):.1f} MiB")
 

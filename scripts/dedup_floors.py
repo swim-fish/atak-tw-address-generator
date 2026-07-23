@@ -1,18 +1,10 @@
-"""Remove floor-level duplicates from places-*.sqlite (conservative).
+"""Consolidate TGOS floor rows into coordinate-aware base addresses.
 
-Strategy (conservative — keep all distinct house-numbers at a coord):
-  - Within each (lat, lon) group:
-      * If any row's ``number`` is ground-floor (does NOT contain 樓/層),
-        KEEP all such ground-floor rows, REMOVE only the 樓/層 rows.
-      * If every row in the group is a 樓/層 row, KEEP the lowest id
-        and remove the rest.
-  - Singleton coords (group of 1) are never touched.
-
-This is conservative on purpose: TGOS sometimes pins multiple distinct
-house-numbers to the same building-centre coordinate (e.g. 大誠街 5-3-2
-號 / 5-5-5 號 / 5-8-8 號 all share one point). Those are distinct
-addresses, not floors — collapsing them to one row would lose searchable
-geocoding.
+Rows are grouped by exact coordinate and full base address, not by coordinate
+alone. A floor suffix after the first ``號`` is removed to derive the base
+number. An existing non-floor row wins; otherwise the lowest-id floor row is
+rewritten into a synthetic base-address row. Different base addresses at the
+same coordinate are preserved.
 
 Outputs:
   - Always writes the to-be-removed id list to a CSV in ``output/logs/``.
@@ -38,6 +30,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import base_address as ba
+
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 LOG_DIR = OUTPUT_DIR / "logs"
 
@@ -46,50 +40,77 @@ LOG_DIR = OUTPUT_DIR / "logs"
 # Removal SQL
 # ---------------------------------------------------------------------------
 #
-# A row is marked for removal when:
-#   - it shares its (lat, lon) with at least one other row
-#     (i.e. group_size > 1), AND
-#   - it is a 樓/層 row, AND
-#   - the group still contains at least one ground-floor row even after
-#     this row is removed.
-#
-# Equivalently: per (lat, lon) group with both ground-floor AND
-# 樓/層 rows, drop every 樓/層 row. Groups consisting entirely of
-# 樓/層 rows fall back to "keep lowest id", removing the rest.
-#
-# ``rank_by_id`` lets us pick "keep one" within the all-floor case.
+# Address identity intentionally excludes ``neighbor`` because it is not part
+# of the human-facing address rendered by normalize_address.py. ``district_code``
+# supplies county/township identity; street falls back to area exactly as the
+# display-name composer does.
 _RANK_CTE = """
-WITH grp AS (
+WITH classified AS (
     SELECT
-        id, lat, lon, number, display_name,
-        CASE WHEN number LIKE '%樓%' OR number LIKE '%層%' THEN 1 ELSE 0 END AS is_floor,
-        COUNT(*)        OVER (PARTITION BY lat, lon) AS group_size,
-        SUM(CASE WHEN number NOT LIKE '%樓%' AND number NOT LIKE '%層%'
-                 THEN 1 ELSE 0 END)
-                         OVER (PARTITION BY lat, lon) AS ground_count,
-        ROW_NUMBER()     OVER (PARTITION BY lat, lon ORDER BY id) AS rn_by_id
-    FROM places
+        p.*,
+        CASE
+            WHEN INSTR(number, '號') > 0
+             AND (INSTR(number, '樓') > INSTR(number, '號')
+               OR INSTR(number, '層') > INSTR(number, '號'))
+            THEN 1 ELSE 0
+        END AS is_floor,
+        CASE
+            WHEN INSTR(number, '號') > 0
+             AND (INSTR(number, '樓') > INSTR(number, '號')
+               OR INSTR(number, '層') > INSTR(number, '號'))
+            THEN SUBSTR(number, 1, INSTR(number, '號'))
+            ELSE number
+        END AS base_number,
+        CASE
+            WHEN INSTR(number, '號') > 0
+             AND (INSTR(number, '樓') > INSTR(number, '號')
+               OR INSTR(number, '層') > INSTR(number, '號'))
+            THEN 1 ELSE 0
+        END AS parseable_floor
+    FROM places p
+),
+grp AS (
+    SELECT
+        classified.*,
+        SUM(CASE WHEN is_floor = 0 THEN 1 ELSE 0 END) OVER (
+            PARTITION BY lat, lon, district_code,
+                         COALESCE(village, ''),
+                         COALESCE(street, area, ''),
+                         COALESCE(lane, ''), COALESCE(alley, ''),
+                         base_number
+        ) AS ground_count,
+        MIN(CASE WHEN is_floor = 0 THEN id END) OVER (
+            PARTITION BY lat, lon, district_code,
+                         COALESCE(village, ''),
+                         COALESCE(street, area, ''),
+                         COALESCE(lane, ''), COALESCE(alley, ''),
+                         base_number
+        ) AS lowest_ground_id,
+        MIN(CASE WHEN parseable_floor = 1 THEN id END) OVER (
+            PARTITION BY lat, lon, district_code,
+                         COALESCE(village, ''),
+                         COALESCE(street, area, ''),
+                         COALESCE(lane, ''), COALESCE(alley, ''),
+                         base_number
+        ) AS lowest_floor_id
+    FROM classified
 ),
 ranked AS (
-    SELECT id, lat, lon, number, display_name,
+    SELECT
+        grp.*,
+        COALESCE(lowest_ground_id, lowest_floor_id) AS kept_id,
            CASE
-               -- Singleton group: keep.
-               WHEN group_size = 1                       THEN 0
-               -- Has any ground-floor row: drop every floor row.
-               WHEN ground_count >= 1 AND is_floor = 1   THEN 1
-               -- All-floor group: keep the lowest id only.
-               WHEN ground_count  = 0 AND rn_by_id > 1   THEN 1
-               -- Ground-floor row in any group: keep.
+               WHEN parseable_floor = 1 AND ground_count > 0 THEN 1
+               WHEN parseable_floor = 1 AND ground_count = 0
+                    AND id <> lowest_floor_id THEN 1
                ELSE 0
-           END AS to_drop
+           END AS to_drop,
+           CASE
+               WHEN parseable_floor = 1 AND ground_count = 0
+                    AND id = lowest_floor_id THEN 1
+               ELSE 0
+           END AS to_synthesize
     FROM grp
-),
--- For the CSV report: pick one representative kept row per (lat, lon)
--- to print alongside each removed row (lowest kept id).
-kept_rep AS (
-    SELECT lat, lon, MIN(id) AS kept_id
-    FROM ranked WHERE to_drop = 0
-    GROUP BY lat, lon
 )
 """
 
@@ -97,26 +118,55 @@ kept_rep AS (
 def _export_removal_csv(conn: sqlite3.Connection, csv_path: Path) -> int:
     """Write the to-be-removed id list to CSV. Returns the row count."""
     cur = conn.cursor()
-    # For each removed row, also note the kept id for the same coord, so
-    # the operator can inspect "row 123 (六樓之5) collapsed into kept id 12 (一樓)".
     cur.execute(
         _RANK_CTE +
-        "SELECT r.id, r.lat, r.lon, r.number, r.display_name, "
-        "       k.kept_id, kp.display_name AS kept_display_name "
+        "SELECT r.id, r.lat, r.lon, r.number, r.base_number, r.display_name, "
+        "       r.kept_id, kp.display_name AS kept_display_name, "
+        "       CASE WHEN r.ground_count > 0 "
+        "            THEN 'matched-existing-base' ELSE 'merged-floor-variants' END "
         "FROM ranked r "
-        "LEFT JOIN kept_rep k ON k.lat = r.lat AND k.lon = r.lon "
-        "LEFT JOIN places   kp ON kp.id = k.kept_id "
+        "LEFT JOIN places kp ON kp.id = r.kept_id "
         "WHERE r.to_drop = 1 "
-        "ORDER BY r.lat, r.lon, r.id"
+        "ORDER BY r.lat, r.lon, r.base_number, r.id"
     )
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     n = 0
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["removed_id", "lat", "lon", "number", "display_name",
-                    "kept_id", "kept_display_name"])
+        w.writerow(["removed_id", "lat", "lon", "number", "base_number",
+                    "display_name", "kept_id", "kept_display_name", "reason"])
         for row in cur:
             w.writerow(row)
+            n += 1
+    return n
+
+
+def _export_synthesis_csv(conn: sqlite3.Connection, csv_path: Path) -> int:
+    """Write the rows that will be rewritten into base addresses."""
+    cur = conn.execute(
+        _RANK_CTE +
+        "SELECT id, lat, lon, number, base_number, county, township, village, "
+        "       street, area, lane, alley, display_name "
+        "FROM ranked r "
+        "WHERE to_synthesize = 1 "
+        "ORDER BY lat, lon, base_number, id"
+    )
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["kept_id", "lat", "lon", "original_number", "base_number",
+                    "original_display_name", "new_display_name"])
+        for row in cur:
+            (row_id, lat, lon, original_number, base_number, county, township,
+             village, street, area, lane, alley, original_display) = row
+            fields = ba.synthesize_fields(
+                county=county, township=township, village=village,
+                street=street, area=area, lane=lane, alley=alley,
+                number=base_number,
+            )
+            w.writerow([row_id, lat, lon, original_number, base_number,
+                        original_display, fields.display_name])
             n += 1
     return n
 
@@ -129,7 +179,19 @@ def _summary(conn: sqlite3.Connection) -> dict:
         _RANK_CTE + "SELECT COUNT(*) FROM ranked WHERE to_drop = 1"
     )
     to_remove = cur.fetchone()[0]
+    cur.execute(
+        _RANK_CTE + "SELECT COUNT(*) FROM ranked WHERE to_synthesize = 1"
+    )
+    to_synthesize = cur.fetchone()[0]
+    cur.execute(
+        _RANK_CTE +
+        "SELECT COUNT(*) FROM ranked "
+        "WHERE (number LIKE '%樓%' OR number LIKE '%層%') AND is_floor = 0"
+    )
+    non_suffix_floor_markers = cur.fetchone()[0]
     return {"total": total, "to_remove": to_remove,
+            "to_synthesize": to_synthesize,
+            "non_suffix_floor_markers": non_suffix_floor_markers,
             "remaining": total - to_remove}
 
 
@@ -137,7 +199,12 @@ def _summary(conn: sqlite3.Connection) -> dict:
 # Apply path — mutate a copy in /tmp, then move back.
 # ---------------------------------------------------------------------------
 
-def _apply(db_path: Path, removed_count: int) -> Path:
+def _apply(
+    db_path: Path,
+    removed_count: int,
+    synthesized_count: int,
+    non_suffix_floor_marker_count: int,
+) -> Path:
     """Run the actual mutation on a tmp copy; return the new file path."""
     # Match ingest_tgos_csv.py: build in tmp dir, then shutil.move back.
     # On Windows the Docker bind-mount issue doesn't apply (we run native
@@ -167,6 +234,15 @@ def _apply(db_path: Path, removed_count: int) -> Path:
             _RANK_CTE +
             "INSERT INTO temp.to_drop (id) SELECT id FROM ranked WHERE to_drop = 1"
         )
+        conn.execute(
+            "CREATE TEMP TABLE to_synthesize "
+            "(id INTEGER PRIMARY KEY, base_number TEXT NOT NULL)"
+        )
+        conn.execute(
+            _RANK_CTE +
+            "INSERT INTO temp.to_synthesize (id, base_number) "
+            "SELECT id, base_number FROM ranked WHERE to_synthesize = 1"
+        )
 
         # Clear FTS + RTree entries for dropped rows BEFORE the places
         # DELETE, otherwise the FTS5 external-content table's rowid
@@ -182,6 +258,37 @@ def _apply(db_path: Path, removed_count: int) -> Path:
         conn.execute(
             "DELETE FROM places WHERE id IN (SELECT id FROM temp.to_drop)"
         )
+
+        print("  synthesizing base-address rows...", flush=True)
+        synth_rows = conn.execute(
+            "SELECT p.id, s.base_number, p.county, p.township, p.village, "
+            "       p.street, p.area, p.lane, p.alley "
+            "FROM places p JOIN temp.to_synthesize s ON s.id = p.id "
+            "ORDER BY p.id"
+        ).fetchall()
+        updates = []
+        for (row_id, base_number, county, township, village, street,
+             area, lane, alley) in synth_rows:
+            fields = ba.synthesize_fields(
+                county=county, township=township, village=village,
+                street=street, area=area, lane=lane, alley=alley,
+                number=base_number,
+            )
+            updates.append((
+                fields.number, fields.name, fields.display_name,
+                fields.display_name_halfwidth, row_id,
+            ))
+        conn.executemany(
+            "UPDATE places "
+            "SET number = ?, name = ?, display_name = ?, "
+            "    display_name_halfwidth = ? "
+            "WHERE id = ?",
+            updates,
+        )
+        if len(updates) != synthesized_count:
+            raise RuntimeError(
+                f"synthesized {len(updates)} rows; expected {synthesized_count}"
+            )
         conn.commit()
 
         # Rebuild FTS index to keep it consistent + compact. We just
@@ -200,7 +307,14 @@ def _apply(db_path: Path, removed_count: int) -> Path:
         meta_updates = {
             "deduped_at": now,
             "deduped_removed": str(removed_count),
-            "deduped_strategy": "drop-floor-rows-when-ground-floor-exists;keep-lowest-id-otherwise",
+            "deduped_synthesized": str(synthesized_count),
+            "deduped_non_suffix_floor_markers": str(
+                non_suffix_floor_marker_count
+            ),
+            "deduped_strategy": (
+                "coordinate-and-base-address;"
+                "prefer-explicit-base;synthesize-lowest-floor-id"
+            ),
             # Refresh the inserted counter so build_manifest's manifest is
             # accurate; preserve the original under deduped_inserted_orig.
         }
@@ -249,6 +363,9 @@ def process(db_path: Path, apply: bool) -> None:
         print(f"  total rows                   : {stats['total']:>10,}", flush=True)
         print(f"  rows to remove (dup floors)  : {stats['to_remove']:>10,}  "
               f"({stats['to_remove'] / stats['total'] * 100:.1f}%)", flush=True)
+        print(f"  base rows to synthesize      : {stats['to_synthesize']:>10,}", flush=True)
+        print(f"  non-suffix 樓/層 markers     : "
+              f"{stats['non_suffix_floor_markers']:>10,}", flush=True)
         print(f"  remaining after dedup        : {stats['remaining']:>10,}", flush=True)
 
         stem = db_path.stem
@@ -258,6 +375,14 @@ def process(db_path: Path, apply: bool) -> None:
         n = _export_removal_csv(conn, csv_path)
         assert n == stats["to_remove"], (n, stats["to_remove"])
         print(f"  wrote {n:,} rows to {csv_path}", flush=True)
+
+        synthesis_path = LOG_DIR / f"synthesize-{stem}-base-{ts}.csv"
+        print(f"  exporting synthesis list → {synthesis_path.name}", flush=True)
+        n_synth = _export_synthesis_csv(conn, synthesis_path)
+        assert n_synth == stats["to_synthesize"], (
+            n_synth, stats["to_synthesize"]
+        )
+        print(f"  wrote {n_synth:,} rows to {synthesis_path}", flush=True)
     finally:
         conn.close()
 
@@ -265,7 +390,12 @@ def process(db_path: Path, apply: bool) -> None:
         print("  DRY-RUN — no changes written. Pass --apply to delete.", flush=True)
         return
 
-    _apply(db_path, stats["to_remove"])
+    _apply(
+        db_path,
+        stats["to_remove"],
+        stats["to_synthesize"],
+        stats["non_suffix_floor_markers"],
+    )
     print("  apply done. Re-run scripts/build_manifest.py to repackage.",
           flush=True)
 

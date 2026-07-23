@@ -4,6 +4,7 @@
 
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Schema](https://img.shields.io/badge/data%20schema-v3-blue?style=flat-square)](docs/data-contract.md)
+[![Data version](https://img.shields.io/badge/data%20version-2026.07.23.1-purple?style=flat-square)](docs/data-versioning.md)
 [![Python](https://img.shields.io/badge/python-3.11-blue?style=flat-square&logo=python)](Dockerfile)
 
 This pipeline turns three authoritative source streams — Taiwan **TGOS**
@@ -22,12 +23,30 @@ The generator ships four ZIP kits that unpack (flat) into
 | Kit | Contents | Mandatory | Purpose |
 |---|---|---|---|
 | `base.zip` | `townships.sqlite`, `roads.sqlite`, `places-osm.sqlite` | **yes** | Reverse geocoding (admin polygons + roads) + OSM landmarks/addresses |
-| `places-taichung.zip` | `places-taichung.sqlite` (~731K rows) | optional | Taichung TGOS addresses |
-| `places-changhua.zip` | `places-changhua.sqlite` (~427K rows) | optional | Changhua TGOS addresses |
+| `places-taichung.zip` | `places-taichung.sqlite` (766,952 rows) | optional | Taichung TGOS addresses |
+| `places-changhua.zip` | `places-changhua.sqlite` (429,584 rows) | optional | Changhua TGOS addresses |
 | `tw-central-full.zip` | everything in one bundle | convenience | All of the above |
 
 Each ZIP carries a sidecar `*.manifest.txt` with ZIP/file/source SHA-256,
-TGOS data date, OSM extraction counts, build timestamp, and the region bbox.
+TGOS data date, release-facing data version, address-policy version, OSM
+extraction counts, build timestamp, and the region bbox.
+
+## Data release version
+
+The current data-kit release identity is defined once in
+[`config/data_version.yaml`](config/data_version.yaml):
+
+```yaml
+data_version: "2026.07.23.1"
+address_policy_version: "2"
+```
+
+`data_version` uses `YYYY.MM.DD.REVISION` CalVer and MUST be bumped for every
+published data-kit release, even when the source CSV is unchanged.
+`address_policy_version` is bumped only when address normalization or
+reduction semantics change. These values do not replace `schema_version`;
+they identify data content and processing policy without forcing a plugin
+schema migration.
 
 ## Data schema — currently **v3**
 
@@ -85,6 +104,9 @@ Or drive the stages individually:
 
 # Re-run strict verification against existing output
 ./run.sh verify
+
+# Release preflight: SQLite metadata, manifests, ZIP sidecars, and hashes
+./run.sh check-version
 ```
 
 > **`base` and `county` build `.sqlite` only.** The `base.zip` /
@@ -100,6 +122,7 @@ Or drive the stages individually:
 | `all` | everything + all ZIPs | `base` + both counties + verify + `pack` |
 | `pack` | the ZIP kits + `*.manifest.txt` | Packages whatever `.sqlite` exist in `output/` |
 | `verify` | — | Strict sample verification (CI gate) |
+| `check-version` | — | Release preflight for data versions, ZIP sidecars, and manifest hashes |
 | `dedup` / `collapse` | — | Advanced: the standalone reduction passes, normally invoked inside `county`/`all` |
 
 Flags forwarded to the container:
@@ -108,7 +131,7 @@ Flags forwarded to the container:
 |---|---|---|
 | `--no-refresh` | `base`, `all` | Skip the Geofabrik `Last-Modified` check; use the cached PBF |
 | `--no-dedup` | `county`, `all` | Skip reduction stage 1 (floor dedup) |
-| `--no-collapse` | `county`, `all` | Skip reduction stage 2 (same-coord collapse) |
+| `--no-collapse` | `county`, `all` | Skip reduction stage 2 (same-coordinate/base-address dedup) |
 | `--dry-run` | `dedup`, `collapse` | Report what would change without writing |
 
 `run.sh` builds the Docker image on first use and runs the container with
@@ -153,8 +176,9 @@ OSM PBF  ──┘                                  ┘
 - **Glyph normalisation** — `臺` → `台` everywhere a place name appears, so
   county/township join keys are consistent across all three sources.
 - **Address reduction** — two passes (`dedup_floors.py`,
-  `collapse_coords.py`) enforce the invariant **at most one row per
-  coordinate**.
+  `collapse_coords.py`) remove floor suffixes and exact duplicate base
+  addresses while preserving different house numbers that share a TGOS
+  coordinate.
 - **Verification** — `verify_samples.py` is the primary quality gate: 200
   anchor samples per TGOS county × 6 checks = ~2,400 assertions per county.
 

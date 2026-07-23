@@ -10,10 +10,11 @@
 #   ./run.sh all                        # base + both counties + verify + package (end to end)
 #   ./run.sh pack                       # package existing output sqlite into ZIP kits + manifests
 #   ./run.sh verify                     # rerun strict verification on existing output
+#   ./run.sh check-version              # verify release data versions + hashes
 #
 # Advanced (normally run automatically inside county/all):
-#   ./run.sh dedup    [--dry-run] [args]  # stage 1: drop floor rows sharing a ground-floor coord
-#   ./run.sh collapse [--dry-run] [args]  # stage 2: collapse each same-coord group to one row
+#   ./run.sh dedup    [--dry-run] [args]  # stage 1: consolidate floor suffixes by base address
+#   ./run.sh collapse [--dry-run] [args]  # stage 2: remove duplicate coordinate/base-address keys
 #
 # Subcommand flags (forwarded to the container):
 #   base|all    --no-refresh              skip the Geofabrik Last-Modified check; use cached PBF
@@ -46,6 +47,7 @@ Usage:
   ./run.sh all
   ./run.sh pack
   ./run.sh verify
+  ./run.sh check-version
 
 Advanced: dedup | collapse        (see header comment / docs)
 

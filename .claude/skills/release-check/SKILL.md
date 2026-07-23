@@ -8,8 +8,9 @@ description: Pre-flight checklist and steps for cutting a GitHub release of the 
 Authoritative procedure for publishing a versioned GitHub release of the SQLite
 data kits. Each kit ZIP (`base.zip`, `places-<county>.zip`, `tw-central-full.zip`)
 ships with a sidecar `*.manifest.txt`. The release MUST be internally consistent:
-the ZIP on GitHub, its `sha256` in the manifest, and the `schema_version` of every
-bundled `.sqlite` must all agree, and the release notes must restate them.
+the ZIP on GitHub, its `sha256` in the manifest, the configured `data_version`
+and `address_policy_version`, and the `schema_version` of every bundled
+`.sqlite` must all agree, and the release notes must restate them.
 
 **Repo:** `swim-fish/atak-tw-address-generator` · **Asset dir:** `output/`
 **gh account:** `swim-fish` (run `gh auth status` first).
@@ -18,6 +19,9 @@ bundled `.sqlite` must all agree, and the release notes must restate them.
 
 - [ ] `gh auth status` → logged in as `swim-fish`, scope includes `repo`.
 - [ ] Kits exist in `output/` (built via `./run.sh all` or `./run.sh pack`).
+- [ ] `./run.sh check-version` passes.
+- [ ] Read `config/data_version.yaml`; confirm this release deliberately uses
+      its `data_version` and `address_policy_version`.
 - [ ] Decide the tag. Check existing ones: `gh release list --repo swim-fish/atak-tw-address-generator`.
       Tags are `vX.Y.Z` (semver). Do not reuse an existing tag.
 
@@ -32,6 +36,16 @@ grep -i 'ZIP SHA-256' tw-central-full.manifest.txt
 ```
 
 If they differ, the ZIP was rebuilt after the manifest — re-run `./run.sh pack` and stop.
+
+### Data-version consistency
+
+```bash
+./run.sh check-version
+```
+
+This checks every root SQLite metadata table, each manifest header and ZIP
+SHA-256, plus the `timestamp.data-version` and
+`timestamp.address-policy-version` files inside every ZIP.
 
 ## 2. Read schema_version from the actual SQLite (ground truth)
 
@@ -59,19 +73,22 @@ Current expected baseline (bump deliberately, per `docs/data-contract.md`):
 Contract reminder for the notes: plugins MUST branch on `schema_version`; the
 `places-*` address-search / FTS `area` contract is **schema_version ≥ 3**.
 
-## 3. Manifest must carry schema_version
+## 3. Manifest must carry data and schema versions
 
 `scripts/build_manifest.py` emits `meta.schema_version` per dataset (the key is
 included in its meta key list). If a manifest predates that fix and is missing
 the line, regenerate with `./run.sh pack`, or — only as a one-off — add
 `    meta.schema_version: <N>` under each dataset's `sha256:` line so it matches
 step 2. The manifest and the release-notes table must show identical versions.
+The manifest header must also match `config/data_version.yaml`, and TGOS
+content entries must carry `meta.address_policy_version`.
 
 ## 4. Create the release and upload assets
 
 Target the current HEAD commit. Upload both the ZIP and its manifest. Notes
-restate region, bbox, ZIP size, ZIP SHA-256, and the per-dataset schema_version
-table from step 2 (see `docs/` for the canonical wording).
+restate data version, address-policy version, region, bbox, ZIP size, ZIP
+SHA-256, and the per-dataset schema_version table from step 2 (see `docs/`
+for the canonical wording).
 
 ```bash
 gh release create vX.Y.Z \
@@ -98,6 +115,7 @@ gh release view vX.Y.Z --repo swim-fish/atak-tw-address-generator \
 - [ ] Every asset `state` is `uploaded` (not `starting`/`uploading`).
 - [ ] `tw-central-full.zip` byte size matches local `ls -la output/tw-central-full.zip`.
 - [ ] Notes table schema_versions == step 2 == manifest (step 3).
+- [ ] Notes data/address-policy versions == `config/data_version.yaml` == manifest.
 - [ ] (optional) Update the README version table / changelog if the schema bumped.
 
 ## Notes

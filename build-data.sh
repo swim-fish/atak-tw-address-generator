@@ -103,9 +103,10 @@ case "$SUBCOMMAND" in
             log "verify_samples reported sample failures (expected for legal-boundary coastline points); continuing to packaging"
         fi
         python3 /app/scripts/build_manifest.py 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/check_data_version.py 2>&1 | tee -a "$LOG_FILE"
         ;;
     dedup)
-        log "Subcommand: dedup (remove same-coord floor duplicates)"
+        log "Subcommand: dedup (consolidate floors by coordinate and base address)"
         APPLY_FLAG="--apply"
         if [ "${1:-}" = "--dry-run" ]; then
             APPLY_FLAG=""
@@ -114,7 +115,7 @@ case "$SUBCOMMAND" in
         python3 /app/scripts/dedup_floors.py $APPLY_FLAG "$@" 2>&1 | tee -a "$LOG_FILE"
         ;;
     collapse)
-        log "Subcommand: collapse (one row per coord; shortest number wins)"
+        log "Subcommand: collapse (dedup coordinate and complete base-address keys)"
         APPLY_FLAG="--apply"
         if [ "${1:-}" = "--dry-run" ]; then
             APPLY_FLAG=""
@@ -125,13 +126,18 @@ case "$SUBCOMMAND" in
     pack)
         log "Subcommand: pack (manifest + ZIPs only)"
         python3 /app/scripts/build_manifest.py 2>&1 | tee -a "$LOG_FILE"
+        python3 /app/scripts/check_data_version.py 2>&1 | tee -a "$LOG_FILE"
+        ;;
+    check-version)
+        log "Subcommand: check-version (data version + ZIP hash consistency)"
+        python3 /app/scripts/check_data_version.py --require-full-kit "$@" 2>&1 | tee -a "$LOG_FILE"
         ;;
     verify)
         log "Subcommand: verify"
         python3 /app/scripts/verify_samples.py "$@" 2>&1 | tee -a "$LOG_FILE"
         ;;
     *)
-        echo "Error: unknown subcommand '$SUBCOMMAND'. Valid: base|county|all|dedup|collapse|verify|pack" >&2
+        echo "Error: unknown subcommand '$SUBCOMMAND'. Valid: base|county|all|dedup|collapse|verify|pack|check-version" >&2
         exit 1
         ;;
 esac
